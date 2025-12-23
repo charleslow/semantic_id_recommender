@@ -1,7 +1,7 @@
 [project]
 name = "semantic-id-recommender"
 version = "0.1.0"
-description = "Add your description here"
+description = "LLM-based recommender using RQ-VAE semantic IDs"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,4 +19,23 @@ dependencies = [
     "rich>=13.0.0",
     "x-transformers>=2.11.24",
     "vector-quantize-pytorch>=1.27.15",
+    "sentence-transformers>=2.2.0",
+    "modal>=0.60.0",
+    "gradio>=4.0.0",
+    "pydantic>=2.0.0",
+    "pytest>=9.0.2",
 ]
+
+[project.optional-dependencies]
+inference = [
+    "vllm>=0.6.0",
+    "outlines>=0.1.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+train-rqvae = "scripts.train_rqvae:main"
+finetune-llm = "scripts.finetune_llm:main"

@@ -1,0 +1,99 @@
+# Semantic ID Recommender Configuration
+
+# RQ-VAE settings for learning semantic IDs
+rqvae:
+  # Input embedding dimension (from sentence-transformers)
+  embedding_dim: 384  # all-MiniLM-L6-v2 output dim
+
+  # Codebook configuration
+  # Total possible items = codebook_size ^ num_quantizers
+  # 256^4 = 4.3B possible items (sufficient for 1K-100K catalogue)
+  codebook_size: 256
+  num_quantizers: 4
+
+  # Hidden layer dimensions
+  hidden_dim: 512
+
+  # Training settings
+  commitment_weight: 0.25
+  decay: 0.99  # EMA decay for codebook updates
+
+  # Training hyperparameters
+  learning_rate: 1.0e-4
+  batch_size: 256
+  max_epochs: 100
+
+  # Embedding model for catalogue items
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+
+# LLM fine-tuning settings
+llm:
+  # Base model (Unsloth-compatible)
+  base_model: "unsloth/Qwen3-4B"
+
+  # LoRA configuration
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+  # Training hyperparameters
+  learning_rate: 2.0e-4
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  max_epochs: 3
+  max_seq_length: 512
+  warmup_ratio: 0.03
+
+  # Special tokens for semantic IDs
+  # Will add [SEM_0_0] to [SEM_3_255] (codebook_idx, code_idx)
+  num_codebooks: 4
+  codebook_size: 256
+
+# Inference/deployment settings
+inference:
+  # Modal configuration
+  gpu: "A10G"
+  container_idle_timeout: 300  # 5 minutes
+
+  # vLLM settings
+  max_model_len: 512
+  temperature: 0.1
+  max_tokens: 32  # semantic IDs are short
+
+  # Constrained generation
+  use_constrained_decoding: true
+
+# Data settings
+data:
+  # Path to catalogue data (JSON/CSV with item info)
+  catalogue_path: "data/catalogue.json"
+
+  # Path to save/load embeddings
+  embeddings_path: "data/embeddings.pt"
+
+  # Path to save/load semantic ID mapping
+  semantic_ids_path: "data/semantic_ids.json"
+
+  # Training data output
+  train_data_path: "data/train.jsonl"
+  val_data_path: "data/val.jsonl"
+
+# Logging
+logging:
+  wandb_project: "semantic-id-recommender"
+  wandb_entity: null  # Set to your wandb username/team
+  log_every_n_steps: 10
+
+# Output paths
+output:
+  rqvae_checkpoint: "checkpoints/rqvae"
+  llm_checkpoint: "checkpoints/llm"
+  hf_repo: null  # Set to push to HuggingFace Hub
