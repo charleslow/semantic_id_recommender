@@ -1,0 +1,22 @@
+[project]
+name = "semantic-id-recommender"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.7.1",
+    "transformers>=4.57.3",
+    "datasets>=2.16.0",
+    "wandb>=0.21.0",
+    "einops>=0.7.0",
+    "omegaconf>=2.3.0",
+    "tqdm>=4.66.0",
+    "numpy>=1.24.0",
+    "accelerate>=0.25.0",
+    "unsloth>=2025.12.5",
+    "lightning>=2.0.0",
+    "rich>=13.0.0",
+    "x-transformers>=2.11.24",
+    "vector-quantize-pytorch>=1.27.15",
+]
