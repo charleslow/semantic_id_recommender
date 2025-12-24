@@ -198,6 +198,174 @@ def load_finetuned_model(
     return model, tokenizer
 
 
+class SemanticIDGenerator:
+    """Generator for semantic IDs with optional constrained decoding."""
+
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        num_quantizers: int = 4,
+        codebook_size: int = 256,
+        use_constrained_decoding: bool = True,
+    ):
+        """
+        Initialize the generator.
+
+        Args:
+            model: Fine-tuned model
+            tokenizer: Tokenizer with semantic ID tokens
+            num_quantizers: Number of RQ-VAE quantizers
+            codebook_size: Size of each codebook
+            use_constrained_decoding: Whether to use constrained decoding
+        """
+        self.model = model
+        self.tokenizer = tokenizer
+        self.num_quantizers = num_quantizers
+        self.codebook_size = codebook_size
+        self.use_constrained_decoding = use_constrained_decoding
+
+        # Build semantic token ID lookup
+        self.semantic_token_ids = [
+            tokenizer.convert_tokens_to_ids(f"[SEM_{q}_{c}]")
+            for q in range(num_quantizers)
+            for c in range(codebook_size)
+        ]
+        self.semantic_token_ids_set = set(self.semantic_token_ids)
+        self.eos_token_id = tokenizer.eos_token_id
+
+        self.system_prompt = (
+            "You are a recommendation system. Given a user query, "
+            "output the semantic ID of the most relevant item. "
+            "Respond only with the semantic ID tokens."
+        )
+
+    def _get_allowed_tokens_for_position(self, position: int) -> list[int]:
+        """Return allowed token IDs for each position in the semantic ID."""
+        if position < self.num_quantizers:
+            # Only allow tokens from the correct quantizer level
+            start_idx = position * self.codebook_size
+            end_idx = start_idx + self.codebook_size
+            return self.semantic_token_ids[start_idx:end_idx]
+        else:
+            # After all quantizers, only allow EOS
+            return [self.eos_token_id]
+
+    def _prefix_allowed_tokens_fn(self, batch_id: int, input_ids) -> list[int]:
+        """Constrained decoding: only allow valid semantic ID tokens in sequence."""
+        generated = input_ids.tolist()
+        sem_count = sum(1 for tok_id in generated if tok_id in self.semantic_token_ids_set)
+        return self._get_allowed_tokens_for_position(sem_count)
+
+    def _extract_semantic_id(self, generated_text: str) -> str:
+        """Extract semantic ID from generated text."""
+        if "<|assistant|>" in generated_text:
+            semantic_id = generated_text.split("<|assistant|>")[-1].strip()
+        else:
+            semantic_id = generated_text.strip()
+
+        # Clean up EOS token if present
+        if self.tokenizer.eos_token:
+            semantic_id = semantic_id.replace(self.tokenizer.eos_token, "").strip()
+
+        return semantic_id
+
+    def generate(
+        self,
+        query: str,
+        temperature: float = 0.1,
+    ) -> str:
+        """
+        Generate semantic ID for a query.
+
+        Args:
+            query: User query
+            temperature: Sampling temperature (ignored if constrained)
+
+        Returns:
+            Generated semantic ID string
+        """
+        prompt = f"<|system|>\n{self.system_prompt}\n<|user|>\n{query}\n<|assistant|>\n"
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+
+        if self.use_constrained_decoding:
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=self.num_quantizers + 1,
+                do_sample=False,  # Greedy for constrained
+                pad_token_id=self.tokenizer.pad_token_id,
+                prefix_allowed_tokens_fn=self._prefix_allowed_tokens_fn,
+            )
+        else:
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=32,
+                temperature=temperature,
+                do_sample=temperature > 0,
+                pad_token_id=self.tokenizer.pad_token_id,
+            )
+
+        generated = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
+        return self._extract_semantic_id(generated)
+
+    def generate_beam(
+        self,
+        query: str,
+        num_beams: int = 10,
+        num_return_sequences: int = 10,
+    ) -> list[tuple[str, float]]:
+        """
+        Generate multiple semantic IDs using beam search.
+
+        Args:
+            query: User query
+            num_beams: Number of beams for beam search
+            num_return_sequences: Number of sequences to return
+
+        Returns:
+            List of (semantic_id, score) tuples, sorted by score (highest first)
+        """
+        prompt = f"<|system|>\n{self.system_prompt}\n<|user|>\n{query}\n<|assistant|>\n"
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+
+        outputs = self.model.generate(
+            **inputs,
+            max_new_tokens=self.num_quantizers + 1,
+            num_beams=num_beams,
+            num_return_sequences=min(num_return_sequences, num_beams),
+            do_sample=False,
+            pad_token_id=self.tokenizer.pad_token_id,
+            prefix_allowed_tokens_fn=self._prefix_allowed_tokens_fn if self.use_constrained_decoding else None,
+            output_scores=True,
+            return_dict_in_generate=True,
+        )
+
+        results = []
+        sequences = outputs.sequences
+        # Compute sequence scores (sum of log probs)
+        scores = outputs.sequences_scores if hasattr(outputs, 'sequences_scores') else [0.0] * len(sequences)
+
+        for seq, score in zip(sequences, scores):
+            generated = self.tokenizer.decode(seq, skip_special_tokens=False)
+            semantic_id = self._extract_semantic_id(generated)
+            score_val = score.item() if hasattr(score, 'item') else float(score)
+            results.append((semantic_id, score_val))
+
+        # Sort by score (highest first) and deduplicate
+        seen = set()
+        unique_results = []
+        for sem_id, score in sorted(results, key=lambda x: x[1], reverse=True):
+            if sem_id not in seen:
+                seen.add(sem_id)
+                unique_results.append((sem_id, score))
+
+        return unique_results
+
+    def __call__(self, query: str, **kwargs) -> str:
+        """Shorthand for generate()."""
+        return self.generate(query, **kwargs)
+
+
 def generate_semantic_id(
     model,
     tokenizer,
@@ -206,7 +374,9 @@ def generate_semantic_id(
     temperature: float = 0.1,
 ) -> str:
     """
-    Generate semantic ID for a query.
+    Generate semantic ID for a query (simple version without constrained decoding).
+
+    For constrained decoding, use SemanticIDGenerator instead.
 
     Args:
         model: Fine-tuned model
