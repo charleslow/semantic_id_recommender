@@ -1,0 +1,1 @@
+- Add special `|<rec>|` token to trigger recommendation

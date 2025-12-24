@@ -202,6 +202,42 @@ Epoch 3/3: loss=0.45
 Model saved to checkpoints/llm
 ```
 
+### Weights & Biases Logging
+
+When wandb is enabled, the following metrics are tracked:
+
+#### Run Configuration (logged at initialization)
+| Config Key | Description |
+|------------|-------------|
+| `base_model` | The HuggingFace model being fine-tuned |
+| `rqvae_codebook_size` | Number of codes per quantizer level |
+| `rqvae_num_quantizers` | Number of levels in semantic IDs |
+| `num_items` | Total items in catalogue |
+| `num_train_examples` | Number of training examples generated |
+
+#### Training Metrics (logged every N steps)
+| Metric | Description |
+|--------|-------------|
+| `train/loss` | Cross-entropy loss on training batch |
+| `train/learning_rate` | Current learning rate (with warmup/decay) |
+| `train/epoch` | Current training epoch |
+| `train/global_step` | Total optimization steps taken |
+| `train/grad_norm` | Gradient norm (useful for debugging instability) |
+
+#### Inference Results (logged at end)
+A wandb Table with columns:
+| Column | Description |
+|--------|-------------|
+| `query` | The test query string |
+| `rank` | Position in beam search results (1-10) |
+| `semantic_id` | Generated semantic ID (e.g., `<S0_5><S1_12><S2_3>`) |
+| `score` | Log probability score from beam search |
+| `category` | Item category (if valid match) |
+| `title` | Item title (if valid match) |
+| `valid` | Whether the semantic ID maps to a real item |
+
+View your runs at: https://wandb.ai/your-username/semantic-id-recommender
+
 ---
 
 ## Stage 3: Deploy to Modal

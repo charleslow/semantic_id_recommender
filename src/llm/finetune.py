@@ -338,6 +338,7 @@ class SemanticIDGenerator:
             prefix_allowed_tokens_fn=self._prefix_allowed_tokens_fn if self.use_constrained_decoding else None,
             output_scores=True,
             return_dict_in_generate=True,
+            use_cache=False,  # Disable KV cache to fix beam search with LoRA/Unsloth
         )
 
         results = []
