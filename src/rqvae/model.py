@@ -113,18 +113,10 @@ class SemanticRQVAE(nn.Module):
             recon_loss: Reconstruction loss
             commit_loss: Commitment loss
         """
-        # Encode
         z = self.encode(x)
-
-        # Quantize
         quantized, indices, commit_loss = self.quantize(z)
-
-        # Decode
         reconstructed = self.decode(quantized)
-
-        # Reconstruction loss (MSE)
         recon_loss = nn.functional.mse_loss(reconstructed, x)
-
         return reconstructed, indices, recon_loss, commit_loss
 
     def get_semantic_ids(self, x: torch.Tensor) -> torch.Tensor:
@@ -160,6 +152,72 @@ class SemanticRQVAE(nn.Module):
                 tokens.append(f"[SEM_{q_idx}_{code}]")
             results.append("".join(tokens))
         return results
+
+    def compute_codebook_stats(
+        self, indices: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """
+        Compute codebook usage statistics and perplexity.
+
+        Perplexity measures how uniformly the codebook is used:
+        - Perplexity = exp(entropy) where entropy = -sum(p * log(p))
+        - Max perplexity = codebook_size (all codes used equally)
+        - Low perplexity indicates codebook collapse (few codes used)
+
+        Args:
+            indices: Codebook indices [batch_size, num_quantizers]
+
+        Returns:
+            Dictionary with:
+            - perplexity_per_level: Perplexity for each quantizer level
+            - avg_perplexity: Average perplexity across all levels
+            - usage_per_level: Fraction of codes used per level
+            - avg_usage: Average usage fraction across all levels
+        """
+        batch_size = indices.shape[0]
+        num_quantizers = indices.shape[1]
+        codebook_size = self.config.codebook_size
+
+        perplexities = []
+        usage_fractions = []
+
+        for q_idx in range(num_quantizers):
+            # Get indices for this quantizer level
+            level_indices = indices[:, q_idx]
+
+            # Count occurrences of each code
+            counts = torch.bincount(
+                level_indices.view(-1),
+                minlength=codebook_size
+            ).float()
+
+            # Compute probability distribution
+            probs = counts / counts.sum()
+
+            # Filter out zero probabilities for log computation
+            nonzero_probs = probs[probs > 0]
+
+            # Compute entropy: H = -sum(p * log(p))
+            entropy = -(nonzero_probs * torch.log(nonzero_probs)).sum()
+
+            # Perplexity = exp(entropy)
+            perplexity = torch.exp(entropy)
+            perplexities.append(perplexity)
+
+            # Usage: fraction of codes that are used at least once
+            codes_used = (counts > 0).sum().float()
+            usage_fraction = codes_used / codebook_size
+            usage_fractions.append(usage_fraction)
+
+        perplexities = torch.stack(perplexities)
+        usage_fractions = torch.stack(usage_fractions)
+
+        return {
+            "perplexity_per_level": perplexities,
+            "avg_perplexity": perplexities.mean(),
+            "usage_per_level": usage_fractions,
+            "avg_usage": usage_fractions.mean(),
+        }
 
     @staticmethod
     def string_to_semantic_id(

@@ -1,4 +1,6 @@
 # Semantic ID Recommender Configuration
+# Copy this file to config.yaml and customize as needed:
+#   cp config.sample.yaml config.yaml
 
 # RQ-VAE settings for learning semantic IDs
 rqvae:

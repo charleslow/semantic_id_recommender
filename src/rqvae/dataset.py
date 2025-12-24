@@ -9,7 +9,6 @@ from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset
-from tqdm import tqdm
 
 
 class ItemEmbeddingDataset(Dataset):
@@ -44,7 +43,7 @@ class ItemEmbeddingDataset(Dataset):
     def from_catalogue(
         cls,
         catalogue_path: str | Path,
-        embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        embedding_model: str = "TaylorAI/gte-tiny",
         text_field: str = "text",
         id_field: str = "id",
         cache_path: str | Path | None = None,

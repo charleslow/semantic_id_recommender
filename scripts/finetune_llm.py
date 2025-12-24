@@ -2,7 +2,7 @@
 Fine-tuning script for LLM on semantic IDs.
 
 Usage:
-    python -m scripts.finetune_llm --config src/config/default.yaml
+    python -m scripts.finetune_llm --config config.yaml
 """
 
 import argparse
@@ -19,7 +19,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="src/config/default.yaml",
+        default="config.yaml",
         help="Path to config file",
     )
     parser.add_argument(

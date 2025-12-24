@@ -28,13 +28,29 @@ class RQVAETrainer(L.LightningModule):
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         embeddings = batch
-        _, _, recon_loss, commit_loss = self.model(embeddings)
+        _, indices, recon_loss, commit_loss = self.model(embeddings)
 
         loss = recon_loss + commit_loss
 
         self.log("train/recon_loss", recon_loss, prog_bar=True)
         self.log("train/commit_loss", commit_loss, prog_bar=True)
         self.log("train/loss", loss, prog_bar=True)
+
+        # Track codebook usage and perplexity
+        codebook_stats = self.model.compute_codebook_stats(indices)
+        self.log("train/avg_perplexity", codebook_stats["avg_perplexity"])
+        self.log("train/avg_codebook_usage", codebook_stats["avg_usage"])
+
+        # Log per-level stats
+        for q_idx in range(self.config.num_quantizers):
+            self.log(
+                f"train/perplexity_level_{q_idx}",
+                codebook_stats["perplexity_per_level"][q_idx],
+            )
+            self.log(
+                f"train/usage_level_{q_idx}",
+                codebook_stats["usage_per_level"][q_idx],
+            )
 
         return loss
 
@@ -44,15 +60,25 @@ class RQVAETrainer(L.LightningModule):
 
         loss = recon_loss + commit_loss
 
-        # Log codebook utilization
-        unique_codes = torch.unique(indices, dim=0).shape[0]
-        total_items = indices.shape[0]
-        utilization = unique_codes / total_items
-
         self.log("val/recon_loss", recon_loss, prog_bar=True)
         self.log("val/commit_loss", commit_loss)
         self.log("val/loss", loss, prog_bar=True)
-        self.log("val/codebook_utilization", utilization)
+
+        # Track codebook usage and perplexity
+        codebook_stats = self.model.compute_codebook_stats(indices)
+        self.log("val/avg_perplexity", codebook_stats["avg_perplexity"], prog_bar=True)
+        self.log("val/avg_codebook_usage", codebook_stats["avg_usage"])
+
+        # Log per-level stats
+        for q_idx in range(self.config.num_quantizers):
+            self.log(
+                f"val/perplexity_level_{q_idx}",
+                codebook_stats["perplexity_per_level"][q_idx],
+            )
+            self.log(
+                f"val/usage_level_{q_idx}",
+                codebook_stats["usage_per_level"][q_idx],
+            )
 
         return loss
 

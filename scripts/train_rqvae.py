@@ -2,7 +2,7 @@
 Training script for RQ-VAE model.
 
 Usage:
-    python -m scripts.train_rqvae --config src/config/default.yaml
+    python -m scripts.train_rqvae --config config.yaml
     python -m scripts.train_rqvae --catalogue data/catalogue.json
 """
 
@@ -26,7 +26,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default="src/config/default.yaml",
+        default="config.yaml",
         help="Path to config file",
     )
     parser.add_argument(

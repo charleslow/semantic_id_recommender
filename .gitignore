@@ -207,3 +207,17 @@ marimo/_lsp/
 __marimo__/
 
 data/*
+!data/.gitkeep
+
+# Config (use config.sample.yaml as template)
+config.yaml
+
+# Checkpoints (model weights are large)
+checkpoints/
+
+# Generated files
+*.pt
+*.safetensors
+
+# Keep notebooks but ignore outputs
+notebooks/.ipynb_checkpoints/
