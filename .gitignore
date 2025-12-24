@@ -208,6 +208,7 @@ __marimo__/
 
 data/*
 !data/.gitkeep
+!data/ag_news_500.jsonl
 
 # Config (use config.sample.yaml as template)
 config.yaml

@@ -27,7 +27,8 @@ class RQVAETrainer(L.LightningModule):
         return self.model(x)
 
     def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        embeddings = batch
+        # Handle both raw tensors and tuples from TensorDataset
+        embeddings = batch[0] if isinstance(batch, (list, tuple)) else batch
         _, indices, recon_loss, commit_loss = self.model(embeddings)
 
         loss = recon_loss + commit_loss
@@ -55,7 +56,8 @@ class RQVAETrainer(L.LightningModule):
         return loss
 
     def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        embeddings = batch
+        # Handle both raw tensors and tuples from TensorDataset
+        embeddings = batch[0] if isinstance(batch, (list, tuple)) else batch
         _, indices, recon_loss, commit_loss = self.model(embeddings)
 
         loss = recon_loss + commit_loss
