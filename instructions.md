@@ -66,83 +66,54 @@ If you don't have local GPU access, you can use RunPod for training and fine-tun
 
 ### Step 3: Connect to Your Pod
 
-**Option A: Terminal (SSH)**
 ```bash
-ssh root@<pod-id>.runpod.io -i ~/.ssh/id_ed25519
-```
-### Step 3.1: Starting Jupyter Notebook in RunPod
-
-If you chose a non-JupyterLab template or want to start Jupyter manually:
-
-**Option B: Install in your virtual environment (Recommended)**
-```bash
-# After setting up your project
-cd semantic_id_recommender
-source .venv/bin/activate
-python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+export POD_ID="<insert pod_id>"
+ssh "$POD_ID"@ssh.runpod.io -i ~/.ssh/id_ed25519
 ```
 
-**Option C: Add jupyter to pyproject.toml (Best for team projects)**
-```bash
-# Add jupyter as a dev dependency
-uv add --dev jupyterlab
-
-# Then start it
-source .venv/bin/activate
-python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
-```
-
-**Access JupyterLab**
-1. Go to RunPod dashboard
-2. Click **Connect** → **HTTP Service [Port 8888]**
-3. Or manually go to: `https://<pod-id>-8888.proxy.runpod.net/`
-
-**Tip: Keep Jupyter running with tmux**
-```bash
-# Start tmux session
-tmux new -s jupyter
-
-# Activate venv and start Jupyter
-cd semantic_id_recommender
-source .venv/bin/activate
-python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
-
-# Detach: Ctrl+B then D
-# Now you can close your terminal and Jupyter keeps running
-```
-
-### Step 4: Setup on RunPod
+### Step 4: Setup the Environment
 
 ```bash
-git clone https://github.com/charleslow/semantic_id_recommender.git
+git clone https://github.com/charleslow/semantic_id_recommender
 cd semantic_id_recommender
 
-# Install uv (fast Python package manager)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.cargo/bin:$PATH"
-
+source $HOME/.cargo/env
 uv sync
 source .venv/bin/activate
 
-huggingface-cli login  # Paste your HF token
-wandb login            # Optional: paste your wandb token
+uv pip install ipykernel
+python -m ipykernel install --user --name=semantic-id-recommender --display-name="Python (semantic-id-recommender)"
 ```
+
+Then:
+1. Access RunPod's Jupyter via **Connect** → **HTTP Service [Port 8888]**
+2. Open your notebook
+3. Click **Kernel** → **Change Kernel** → **Python (semantic-id-recommender)**
+
 
 ### Step 5: Upload Your Data
 
-**Option A: Using SCP**
+**Option A: Using rsync over SSH (Recommended)**
 ```bash
 # From your local machine
-scp data/catalogue.jsonl root@<pod-id>.runpod.io:~/semantic_id_recommender/data/
+# Note: SCP often doesn't work on RunPod, use rsync instead
+rsync -avz -e "ssh -i ~/.ssh/id_ed25519" data/mcf_articles.jsonl "${POD_ID}"@ssh.runpod.io:~/semantic_id_recommender/data/
 ```
 
-**Option B: Using wget/curl**
+**Option B: Using Direct SSH + cat**
 ```bash
-# If data is hosted online
+# From your local machine
+cat data/mcf_articles.jsonl | ssh -i ~/.ssh/id_ed25519 "${POD_ID}"@ssh.runpod.io "cat > ~/semantic_id_recommender/data/mcf_articles.jsonl"
+```
+
+**Option C: Using wget/curl**
+```bash
+# If data is hosted online (from RunPod terminal)
 wget https://your-url.com/catalogue.jsonl -O data/catalogue.jsonl
 ```
 
-**Option C: Using JupyterLab Upload**
+**Option D: Using JupyterLab Upload (Easiest)**
 1. Click the upload button in JupyterLab file browser
 2. Navigate to `data/` folder and upload
 
@@ -171,11 +142,12 @@ python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-
 
 ### Step 7: Download Results
 
-**Option A: Using SCP**
+**Option A: Using rsync over SSH (Recommended)**
 ```bash
 # From your local machine
-scp -r root@<pod-id>.runpod.io:~/semantic_id_recommender/checkpoints ./checkpoints
-scp root@<pod-id>.runpod.io:~/semantic_id_recommender/data/semantic_ids.json ./data/
+# Note: SCP often doesn't work on RunPod, use rsync instead
+rsync -avz -e "ssh -i ~/.ssh/id_ed25519" "${POD_ID}"@ssh.runpod.io:~/semantic_id_recommender/checkpoints ./
+rsync -avz -e "ssh -i ~/.ssh/id_ed25519" "${POD_ID}"@ssh.runpod.io:~/semantic_id_recommender/data/semantic_ids.json ./data/
 ```
 
 **Option B: Push to HuggingFace Hub**
