@@ -22,6 +22,7 @@ class SemanticRQVAEConfig:
     num_quantizers: int = 4  # Number of residual quantization levels
     commitment_weight: float = 0.25  # Commitment loss weight
     decay: float = 0.99  # EMA decay for codebook updates
+    threshold_ema_dead_code: int = 1  # Reset codes used fewer than this many times
 
 
 class SemanticRQVAE(nn.Module):
@@ -55,7 +56,7 @@ class SemanticRQVAE(nn.Module):
             commitment_weight=config.commitment_weight,
             decay=config.decay,
             kmeans_init=True,  # Initialize codebooks with k-means
-            threshold_ema_dead_code=2,  # Reset dead codes
+            threshold_ema_dead_code=config.threshold_ema_dead_code,
         )
 
         # Decoder: reconstruct original embedding from quantized representation
