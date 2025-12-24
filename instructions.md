@@ -5,13 +5,14 @@ This guide walks you through setting up and running the semantic ID recommender 
 ## Table of Contents
 
 1. [Prerequisites](#prerequisites)
-2. [Local Setup](#local-setup)
-3. [Stage 1: Train RQ-VAE](#stage-1-train-rq-vae)
-4. [Stage 2: Fine-tune LLM](#stage-2-fine-tune-llm)
-5. [Stage 3: Deploy to Modal](#stage-3-deploy-to-modal)
-6. [Stage 4: Run Frontend](#stage-4-run-frontend)
-7. [Testing in Colab](#testing-in-colab)
-8. [Troubleshooting](#troubleshooting)
+2. [Running on RunPod](#running-on-runpod)
+3. [Local Setup](#local-setup)
+4. [Stage 1: Train RQ-VAE](#stage-1-train-rq-vae)
+5. [Stage 2: Fine-tune LLM](#stage-2-fine-tune-llm)
+6. [Stage 3: Deploy to Modal](#stage-3-deploy-to-modal)
+7. [Stage 4: Run Frontend](#stage-4-run-frontend)
+8. [Testing in Colab](#testing-in-colab)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -39,6 +40,210 @@ This guide walks you through setting up and running the semantic ID recommender 
 | RQ-VAE Training | CPU (slow) / Any GPU | RTX 3060+ |
 | LLM Fine-tuning | 16GB VRAM | 24GB VRAM (RTX 4090, A10G) |
 | Inference | A10G (Modal) | A10G |
+
+---
+
+## Running on RunPod
+
+If you don't have local GPU access, you can use RunPod for training and fine-tuning.
+
+### Step 1: Create a RunPod Account
+
+1. Sign up at https://www.runpod.io/
+2. Add credits to your account (pay-as-you-go)
+
+### Step 2: Launch a Pod
+
+1. Go to **Pods** → **GPU Instances**
+2. Select a GPU based on your needs:
+   - **RQ-VAE Training**: RTX 3060 or higher (~$0.20/hr)
+   - **LLM Fine-tuning**: RTX 4090, A6000, or A100 (~$0.40-$2.00/hr)
+3. Choose a template:
+   - **RunPod PyTorch** (recommended)
+   - Or **RunPod Pytorch + JupyterLab** for notebook access
+4. Set disk space: at least **50 GB** for model downloads
+5. Click **Deploy**
+
+### Step 3: Connect to Your Pod
+
+**Option A: Terminal (SSH)**
+```bash
+ssh root@<pod-id>.runpod.io -i ~/.ssh/id_ed25519
+```
+### Step 3.1: Starting Jupyter Notebook in RunPod
+
+If you chose a non-JupyterLab template or want to start Jupyter manually:
+
+**Option B: Install in your virtual environment (Recommended)**
+```bash
+# After setting up your project
+cd semantic_id_recommender
+source .venv/bin/activate
+python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+```
+
+**Option C: Add jupyter to pyproject.toml (Best for team projects)**
+```bash
+# Add jupyter as a dev dependency
+uv add --dev jupyterlab
+
+# Then start it
+source .venv/bin/activate
+python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+```
+
+**Access JupyterLab**
+1. Go to RunPod dashboard
+2. Click **Connect** → **HTTP Service [Port 8888]**
+3. Or manually go to: `https://<pod-id>-8888.proxy.runpod.net/`
+
+**Tip: Keep Jupyter running with tmux**
+```bash
+# Start tmux session
+tmux new -s jupyter
+
+# Activate venv and start Jupyter
+cd semantic_id_recommender
+source .venv/bin/activate
+python -m jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+
+# Detach: Ctrl+B then D
+# Now you can close your terminal and Jupyter keeps running
+```
+
+### Step 4: Setup on RunPod
+
+```bash
+git clone https://github.com/charleslow/semantic_id_recommender.git
+cd semantic_id_recommender
+
+# Install uv (fast Python package manager)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.cargo/bin:$PATH"
+
+uv sync
+source .venv/bin/activate
+
+huggingface-cli login  # Paste your HF token
+wandb login            # Optional: paste your wandb token
+```
+
+### Step 5: Upload Your Data
+
+**Option A: Using SCP**
+```bash
+# From your local machine
+scp data/catalogue.jsonl root@<pod-id>.runpod.io:~/semantic_id_recommender/data/
+```
+
+**Option B: Using wget/curl**
+```bash
+# If data is hosted online
+wget https://your-url.com/catalogue.jsonl -O data/catalogue.jsonl
+```
+
+**Option C: Using JupyterLab Upload**
+1. Click the upload button in JupyterLab file browser
+2. Navigate to `data/` folder and upload
+
+### Step 6: Run Training
+
+#### Train RQ-VAE
+```bash
+# Using your data
+python -m scripts.train_rqvae --catalogue data/catalogue.jsonl
+
+# Or test with dummy data
+python -m scripts.train_rqvae --create-dummy --dummy-size 1000
+```
+
+#### Fine-tune LLM
+```bash
+# Using default config
+python -m scripts.finetune_llm
+
+# Or with custom model
+python -m scripts.finetune_llm --base-model "unsloth/Qwen3-4B"
+
+# Push to HuggingFace Hub when done
+python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-recommender"
+```
+
+### Step 7: Download Results
+
+**Option A: Using SCP**
+```bash
+# From your local machine
+scp -r root@<pod-id>.runpod.io:~/semantic_id_recommender/checkpoints ./checkpoints
+scp root@<pod-id>.runpod.io:~/semantic_id_recommender/data/semantic_ids.json ./data/
+```
+
+**Option B: Push to HuggingFace Hub**
+```bash
+# In RunPod terminal
+python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-recommender"
+
+# Later, download locally
+git clone https://huggingface.co/your-username/semantic-recommender checkpoints/llm
+```
+
+**Option C: Using JupyterLab Download**
+1. Right-click on files/folders in JupyterLab
+2. Select **Download**
+
+### Step 8: Monitor Training
+
+**Using W&B (Recommended)**
+```bash
+# W&B will log metrics automatically
+# View at: https://wandb.ai/your-username/semantic-id-recommender
+```
+
+**Using Terminal Output**
+```bash
+# Training progress is shown in real-time
+# Watch GPU usage:
+watch -n 1 nvidia-smi
+```
+
+### Step 9: Stop Your Pod
+
+**Important**: RunPod charges per minute while pod is running!
+
+1. Go to RunPod dashboard
+2. Click **Stop** or **Terminate** pod
+3. **Stop** = Keeps disk, can restart later (~$0.10/GB/month storage)
+4. **Terminate** = Deletes everything, download checkpoints first!
+
+### RunPod Tips
+
+- **Use tmux/screen** to keep training running if disconnected:
+  ```bash
+  # Start tmux session
+  tmux new -s training
+  
+  # Run your training
+  python -m scripts.finetune_llm
+  
+  # Detach: Ctrl+B then D
+  # Reattach later: tmux attach -t training
+  ```
+
+- **Check GPU availability**:
+  ```bash
+  nvidia-smi
+  python -c "import torch; print(torch.cuda.is_available())"
+  ```
+
+- **Estimate costs**:
+  - RTX 4090: ~$0.40/hr × 3 hours (fine-tuning) = ~$1.20
+  - A100 40GB: ~$1.50/hr × 3 hours = ~$4.50
+  - Storage: 50GB × $0.10/GB/month if you stop (not terminate)
+
+- **Save money**: 
+  - Use **Community Cloud** for cheaper rates (less reliable)
+  - Use **Secure Cloud** for guaranteed availability
+  - Terminate pod immediately after training completes
 
 ---
 

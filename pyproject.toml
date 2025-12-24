@@ -39,3 +39,9 @@ dev = [
 [project.scripts]
 train-rqvae = "scripts.train_rqvae:main"
 finetune-llm = "scripts.finetune_llm:main"
+
+[dependency-groups]
+dev = [
+    "jupyterlab>=4.5.1",
+    "nbstripout>=0.8.1",
+]

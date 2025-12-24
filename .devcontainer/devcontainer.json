@@ -1,6 +1,9 @@
 {
   "name": "semantic-id-recommender",
   "image": "mcr.microsoft.com/devcontainers/python:1-3.12-bookworm",
+  "mounts": [
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
