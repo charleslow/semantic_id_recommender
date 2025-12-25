@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import torch
+from sentence_transformers import SentenceTransformer
 from torch.utils.data import Dataset
 
 
@@ -31,7 +32,9 @@ class ItemEmbeddingDataset(Dataset):
             item_ids: List of item IDs corresponding to embeddings
         """
         self.embeddings = embeddings
-        self.item_ids = item_ids or list(range(len(embeddings))) if embeddings is not None else []
+        self.item_ids = (
+            item_ids or list(range(len(embeddings))) if embeddings is not None else []
+        )
 
     def __len__(self) -> int:
         return len(self.embeddings) if self.embeddings is not None else 0
@@ -43,8 +46,9 @@ class ItemEmbeddingDataset(Dataset):
     def from_catalogue(
         cls,
         catalogue_path: str | Path,
+        *,
+        fields: list[str] | None = None,
         embedding_model: str = "TaylorAI/gte-tiny",
-        text_field: str = "text",
         id_field: str = "id",
         cache_path: str | Path | None = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
@@ -55,7 +59,9 @@ class ItemEmbeddingDataset(Dataset):
         Args:
             catalogue_path: Path to JSON/JSONL file with items
             embedding_model: Sentence transformer model name
-            text_field: Field name for item text (used for embedding)
+            fields: List of field names to include in the text representation.
+                    Text will be formatted as "{field_name}: {field_value}\n..."
+                    Defaults to ["title", "description"] if not specified.
             id_field: Field name for item ID
             cache_path: Optional path to cache embeddings
             device: Device for embedding generation
@@ -83,28 +89,26 @@ class ItemEmbeddingDataset(Dataset):
 
         print(f"Loaded {len(items)} items from {catalogue_path}")
 
+        if fields is None:
+            # Take all fields except the ID field
+            sample_item = items[0]
+            fields = [k for k in sample_item.keys() if k != id_field]
+
         # Extract texts and IDs
         texts = []
         item_ids = []
         for item in items:
-            # Handle different text field formats
-            if text_field in item:
-                text = item[text_field]
-            elif "title" in item and "description" in item:
-                text = f"{item['title']}. {item['description']}"
-            elif "title" in item:
-                text = item["title"]
-            elif "name" in item:
-                text = item["name"]
-            else:
-                text = str(item)
-
+            text_parts = [
+                f"{field}: {item[field]}"
+                for field in fields
+                if (field in item) and item[field]
+            ]
+            text = "\n".join(text_parts)
             texts.append(text)
             item_ids.append(item.get(id_field, len(item_ids)))
 
         # Generate embeddings
         print(f"Generating embeddings with {embedding_model}...")
-        from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer(embedding_model, device=device)
         embeddings = model.encode(
@@ -160,13 +164,15 @@ def create_dummy_catalogue(
         adj = random.choice(adjectives)
         noun = random.choice(nouns)
 
-        items.append({
-            "id": f"item_{i:06d}",
-            "title": f"{adj} {category} {noun}",
-            "description": f"A high-quality {adj.lower()} {noun.lower()} for {category.lower()} enthusiasts.",
-            "category": category,
-            "price": round(random.uniform(10, 500), 2),
-        })
+        items.append(
+            {
+                "id": f"item_{i:06d}",
+                "title": f"{adj} {category} {noun}",
+                "description": f"A high-quality {adj.lower()} {noun.lower()} for {category.lower()} enthusiasts.",
+                "category": category,
+                "price": round(random.uniform(10, 500), 2),
+            }
+        )
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

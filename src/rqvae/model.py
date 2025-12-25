@@ -57,6 +57,8 @@ class SemanticRQVAE(nn.Module):
             decay=config.decay,
             kmeans_init=True,  # Initialize codebooks with k-means
             threshold_ema_dead_code=config.threshold_ema_dead_code,
+            # Follow TIGER's approach of separate codebooks per level
+            shared_codebook=False,
         )
 
         # Decoder: reconstruct original embedding from quantized representation
@@ -154,9 +156,7 @@ class SemanticRQVAE(nn.Module):
             results.append("".join(tokens))
         return results
 
-    def compute_codebook_stats(
-        self, indices: torch.Tensor
-    ) -> dict[str, torch.Tensor]:
+    def compute_codebook_stats(self, indices: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Compute codebook usage statistics and perplexity.
 
@@ -188,8 +188,7 @@ class SemanticRQVAE(nn.Module):
 
             # Count occurrences of each code
             counts = torch.bincount(
-                level_indices.view(-1),
-                minlength=codebook_size
+                level_indices.view(-1), minlength=codebook_size
             ).float()
 
             # Compute probability distribution
@@ -221,9 +220,7 @@ class SemanticRQVAE(nn.Module):
         }
 
     @staticmethod
-    def string_to_semantic_id(
-        s: str, num_quantizers: int = 4
-    ) -> list[int] | None:
+    def string_to_semantic_id(s: str, num_quantizers: int = 4) -> list[int] | None:
         """
         Parse semantic ID string back to indices.
 
