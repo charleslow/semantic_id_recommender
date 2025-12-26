@@ -208,7 +208,7 @@ python -c "
 from src.rqvae.hub import upload_to_hub
 import os
 upload_to_hub(
-    model_dir='models/rqvae_hub',
+    local_dir='models/rqvae_hub',
     repo_id='your-username/semantic-rqvae',
     token=os.getenv('HF_TOKEN')
 )

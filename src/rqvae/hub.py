@@ -17,18 +17,18 @@ from .model import SemanticRQVAE, SemanticRQVAEConfig
 
 def save_model_for_hub(
     model: SemanticRQVAE,
-    save_dir: str | Path,
+    local_dir: str | Path,
     semantic_ids_path: Optional[str | Path] = None,
     training_info: Optional[dict] = None,
 ) -> None:
     """
-    Save RQ-VAE model and optional semantic ID mappings to a directory.
+    Save RQ-VAE model and optional semantic ID mappings to a local directory.
 
     This prepares the model for uploading to HuggingFace Hub.
 
     Args:
         model: Trained SemanticRQVAE model
-        save_dir: Directory to save model files
+        local_dir: Local directory to save model files
         semantic_ids_path: Optional path to semantic_ids.json to include
         training_info: Optional dictionary with training metrics/info
 
@@ -39,8 +39,8 @@ def save_model_for_hub(
 
     Note: README.md should be created/edited directly on HuggingFace Hub
     """
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
+    local_dir = Path(local_dir)
+    local_dir.mkdir(parents=True, exist_ok=True)
 
     # Save model checkpoint locally
     checkpoint = {
@@ -59,10 +59,10 @@ def save_model_for_hub(
     if training_info:
         checkpoint["training_info"] = training_info
 
-    torch.save(checkpoint, save_dir / "rqvae_model.pt")
+    torch.save(checkpoint, local_dir / "rqvae_model.pt")
 
     # Save config as JSON for easy inspection
-    with open(save_dir / "config.json", "w") as f:
+    with open(local_dir / "config.json", "w") as f:
         json.dump(checkpoint["config"], f, indent=2)
 
     # Copy semantic IDs if provided
@@ -71,9 +71,9 @@ def save_model_for_hub(
         if semantic_ids_path.exists():
             import shutil
 
-            shutil.copy(semantic_ids_path, save_dir / "semantic_ids.json")
+            shutil.copy(semantic_ids_path, local_dir / "semantic_ids.json")
 
-    print(f"✓ Saved model files to {save_dir}")
+    print(f"✓ Saved model files to {local_dir}")
     print("  - rqvae_model.pt")
     print("  - config.json")
     if semantic_ids_path and Path(semantic_ids_path).exists():
@@ -84,7 +84,7 @@ def save_model_for_hub(
 
 
 def upload_to_hub(
-    model_dir: str | Path,
+    local_dir: str | Path,
     repo_id: str,
     token: Optional[str] = None,
     commit_message: str = "Upload RQ-VAE model",
@@ -95,23 +95,15 @@ def upload_to_hub(
     IMPORTANT: This function assumes a private repository has already been created.
     Create the repo first using the HuggingFace UI or CLI:
 
-    Option 1 - Using HuggingFace UI:
+    Using HuggingFace UI:
         1. Go to https://huggingface.co/new
         2. Enter repository name (e.g., "semantic-rqvae")
         3. Select "Model" as the repository type
         4. Check "Make this repository private"
         5. Click "Create repository"
 
-    Option 2 - Using HuggingFace CLI:
-        huggingface-cli repo create semantic-rqvae --type model --private
-
-    Option 3 - Using Python:
-        from huggingface_hub import HfApi
-        api = HfApi(token="hf_...")
-        api.create_repo(repo_id="username/semantic-rqvae", private=True)
-
     Args:
-        model_dir: Directory containing model files (from save_model_for_hub)
+        local_dir: Local directory containing model files (from save_model_for_hub)
         repo_id: HuggingFace repo ID (username/repo-name) - repo must already exist
         token: HuggingFace API token (or use HF_TOKEN env var)
         commit_message: Commit message for the upload
@@ -122,13 +114,13 @@ def upload_to_hub(
     Example:
         >>> # First create the repo (see above)
         >>> upload_to_hub(
-        ...     model_dir="models/rqvae_hub",
+        ...     local_dir="models/rqvae_hub",
         ...     repo_id="myusername/semantic-rqvae",
         ...     token="hf_...",
         ... )
     """
     api = HfApi(token=token)
-    model_dir = Path(model_dir)
+    local_dir = Path(local_dir)
 
     # Verify repo exists
     try:
@@ -137,20 +129,13 @@ def upload_to_hub(
     except Exception as e:
         print(f"✗ Error: Repository '{repo_id}' not found or not accessible.")
         print("  Please create the private repository first:")
-        print("  1. Go to https://huggingface.co/new")
-        print(
-            f"  2. Create a private Model repository named '{repo_id.split('/')[-1]}'"
-        )
-        print(
-            f"  Or run: huggingface-cli repo create {repo_id.split('/')[-1]} --type model --private"
-        )
         raise ValueError(
             f"Repository {repo_id} must be created before uploading"
         ) from e
 
     # Upload all files in the directory
     api.upload_folder(
-        folder_path=str(model_dir),
+        folder_path=str(local_dir),
         repo_id=repo_id,
         repo_type="model",
         commit_message=commit_message,
