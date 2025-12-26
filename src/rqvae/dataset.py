@@ -52,6 +52,7 @@ class ItemEmbeddingDataset(Dataset):
         id_field: str = "id",
         cache_path: str | Path | None = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
+        batch_size: int = 32,
     ) -> "ItemEmbeddingDataset":
         """
         Create dataset from catalogue file, generating embeddings.
@@ -65,6 +66,7 @@ class ItemEmbeddingDataset(Dataset):
             id_field: Field name for item ID
             cache_path: Optional path to cache embeddings
             device: Device for embedding generation
+            batch_size: Batch size for embedding generation
 
         Returns:
             ItemEmbeddingDataset with computed embeddings
@@ -116,6 +118,7 @@ class ItemEmbeddingDataset(Dataset):
             show_progress_bar=True,
             convert_to_tensor=True,
             device=device,
+            batch_size=batch_size,
         )
 
         # Move to CPU for storage
