@@ -79,7 +79,11 @@ Some utility functions:
 
 ### src/rqvae/trainer.py
 
-Contains the lightning module for training the `RQVAE` model
+Contains the lightning module for training the `RQVAE` model:
+- `training_step` / `validation_step`:
+    - Runs the batch through the model
+    - Computes `loss = recon_loss + commit_loss`
+    - Uses `model.compute_codebook_stats` to get codebook stats and log them
 
 
 

@@ -4,11 +4,9 @@ LLM fine-tuning script using Unsloth.
 Fine-tunes a base model to generate semantic IDs from user queries.
 """
 
-from pathlib import Path
-
 from datasets import Dataset
-from trl import SFTTrainer
 from transformers import TrainingArguments
+from trl import SFTTrainer
 
 from .data import get_semantic_id_tokens
 
@@ -113,8 +111,13 @@ def finetune_model(
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
         target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
         ],
         bias="none",
         use_gradient_checkpointing="unsloth",  # Memory efficient
@@ -281,7 +284,9 @@ class SemanticIDGenerator:
 
         has_start = self.sem_start_id in generated
         has_end = self.sem_end_id in generated
-        sem_count = sum(1 for tok_id in generated if tok_id in self.semantic_token_ids_set)
+        sem_count = sum(
+            1 for tok_id in generated if tok_id in self.semantic_token_ids_set
+        )
 
         if not has_start:
             position = 0
@@ -334,7 +339,8 @@ class SemanticIDGenerator:
         if self.use_constrained_decoding:
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=self.num_quantizers + 3,  # +1 for [SEM_START], +1 for [SEM_END], +1 for EOS
+                max_new_tokens=self.num_quantizers
+                + 3,  # +1 for [SEM_START], +1 for [SEM_END], +1 for EOS
                 do_sample=False,  # Greedy for constrained
                 pad_token_id=self.tokenizer.pad_token_id,
                 prefix_allowed_tokens_fn=self._prefix_allowed_tokens_fn,
@@ -373,12 +379,15 @@ class SemanticIDGenerator:
 
         outputs = self.model.generate(
             **inputs,
-            max_new_tokens=self.num_quantizers + 3,  # +1 for [SEM_START], +1 for [SEM_END], +1 for EOS
+            max_new_tokens=self.num_quantizers
+            + 3,  # +1 for [SEM_START], +1 for [SEM_END], +1 for EOS
             num_beams=num_beams,
             num_return_sequences=min(num_return_sequences, num_beams),
             do_sample=False,
             pad_token_id=self.tokenizer.pad_token_id,
-            prefix_allowed_tokens_fn=self._prefix_allowed_tokens_fn if self.use_constrained_decoding else None,
+            prefix_allowed_tokens_fn=self._prefix_allowed_tokens_fn
+            if self.use_constrained_decoding
+            else None,
             output_scores=True,
             return_dict_in_generate=True,
             use_cache=False,  # Disable KV cache to fix beam search with LoRA/Unsloth
@@ -387,12 +396,16 @@ class SemanticIDGenerator:
         results = []
         sequences = outputs.sequences
         # Compute sequence scores (sum of log probs)
-        scores = outputs.sequences_scores if hasattr(outputs, 'sequences_scores') else [0.0] * len(sequences)
+        scores = (
+            outputs.sequences_scores
+            if hasattr(outputs, "sequences_scores")
+            else [0.0] * len(sequences)
+        )
 
         for seq, score in zip(sequences, scores):
             generated = self.tokenizer.decode(seq, skip_special_tokens=False)
             semantic_id = self._extract_semantic_id(generated)
-            score_val = score.item() if hasattr(score, 'item') else float(score)
+            score_val = score.item() if hasattr(score, "item") else float(score)
             results.append((semantic_id, score_val))
 
         # Sort by score (highest first) and deduplicate
@@ -456,6 +469,6 @@ def generate_semantic_id(
     if "<|assistant|>" in generated:
         semantic_id = generated.split("<|assistant|>")[-1].strip()
     else:
-        semantic_id = generated[len(prompt):].strip()
+        semantic_id = generated[len(prompt) :].strip()
 
     return semantic_id

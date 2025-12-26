@@ -45,7 +45,7 @@ This guide walks you through setting up and running the semantic ID recommender 
 
 ## Running on RunPod
 
-If you don't have local GPU access, you can use RunPod for training and fine-tuning.
+This repo is designed for running on runpod.
 
 ### Step 1: Create a RunPod Account
 
@@ -66,56 +66,58 @@ If you don't have local GPU access, you can use RunPod for training and fine-tun
 
 ### Step 3: Connect to Your Pod
 
+Make sure to add your public SSH key to RunPod first (Settings → SSH Keys).
+
+In your pod's **Connect** menu, use **SSH over exposed TCP** (not the proxy method):
+
 ```bash
-export POD_ID="<insert pod_id>"
-ssh "$POD_ID"@ssh.runpod.io -i ~/.ssh/id_ed25519
+# Get the connection command from RunPod dashboard
+# It will look something like:
+ssh root@<ip-address> -p <port> -i ~/.ssh/id_ed25519
+
+# Save these for later use:
+export POD_IP="<ip-address>"
+export POD_PORT="22022"
 ```
 
 ### Step 4: Setup the Environment
 
+On the RunPod pod, clone the repository and install dependencies:
+
 ```bash
+# Clone the code repository
+cd workspace
 git clone https://github.com/charleslow/semantic_id_recommender
 cd semantic_id_recommender
 
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.cargo/env
+source $HOME/.bashrc
 uv sync
 source .venv/bin/activate
 
+# Install Jupyter kernel
 uv pip install ipykernel
 python -m ipykernel install --user --name=semantic-id-recommender --display-name="Python (semantic-id-recommender)"
 ```
 
-Then:
-1. Access RunPod's Jupyter via **Connect** → **HTTP Service [Port 8888]**
-2. Open your notebook
-3. Click **Kernel** → **Change Kernel** → **Python (semantic-id-recommender)**
+### Step 5: Transfer Data to RunPod
 
+From your **local machine**, transfer your data files using scp:
 
-### Step 5: Upload Your Data
-
-**Option A: Using rsync over SSH (Recommended)**
 ```bash
-# From your local machine
-# Note: SCP often doesn't work on RunPod, use rsync instead
-rsync -avz -e "ssh -i ~/.ssh/id_ed25519" data/mcf_articles.jsonl "${POD_ID}"@ssh.runpod.io:~/semantic_id_recommender/data/
+# Transfer data files to RunPod using direct TCP connection
+# Use the POD_IP and POD_PORT from Step 3
+scp -P ${POD_PORT} -i ~/.ssh/id_ed25519 \
+  data/* \
+  root@${POD_IP}:/workspace/semantic_id_recommender/data/
+
+# Verify files transferred
+ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519 \
+  "ls -lh ~/semantic_id_recommender/data/"
 ```
 
-**Option B: Using Direct SSH + cat**
-```bash
-# From your local machine
-cat data/mcf_articles.jsonl | ssh -i ~/.ssh/id_ed25519 "${POD_ID}"@ssh.runpod.io "cat > ~/semantic_id_recommender/data/mcf_articles.jsonl"
-```
+**Note**: Use the **SSH over exposed TCP** connection (direct IP and port) from Step 3.
 
-**Option C: Using wget/curl**
-```bash
-# If data is hosted online (from RunPod terminal)
-wget https://your-url.com/catalogue.jsonl -O data/catalogue.jsonl
-```
-
-**Option D: Using JupyterLab Upload (Easiest)**
-1. Click the upload button in JupyterLab file browser
-2. Navigate to `data/` folder and upload
 
 ### Step 6: Run Training
 
@@ -140,45 +142,38 @@ python -m scripts.finetune_llm --base-model "unsloth/Qwen3-4B"
 python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-recommender"
 ```
 
-### Step 7: Download Results
+### Step 7: Save Models
 
-**Option A: Using rsync over SSH (Recommended)**
+After training completes, you have two options for saving your models:
+
+**Option A: Push to HuggingFace Hub (Recommended for deployment)**
+
 ```bash
-# From your local machine
-# Note: SCP often doesn't work on RunPod, use rsync instead
-rsync -avz -e "ssh -i ~/.ssh/id_ed25519" "${POD_ID}"@ssh.runpod.io:~/semantic_id_recommender/checkpoints ./
-rsync -avz -e "ssh -i ~/.ssh/id_ed25519" "${POD_ID}"@ssh.runpod.io:~/semantic_id_recommender/data/semantic_ids.json ./data/
+# Set your HuggingFace token
+export HF_TOKEN="hf_..."
+
+# Use the notebook's upload functions or CLI
+# This makes models accessible for Modal deployment
 ```
 
-**Option B: Push to HuggingFace Hub**
-```bash
-# In RunPod terminal
-python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-recommender"
 
-# Later, download locally
-git clone https://huggingface.co/your-username/semantic-recommender checkpoints/llm
-```
+### Step 8: Access Jupyter (Optional)
 
-**Option C: Using JupyterLab Download**
-1. Right-click on files/folders in JupyterLab
-2. Select **Download**
+If you're using the Jupyter template:
 
-### Step 8: Monitor Training
+1. Access RunPod's Jupyter via **Connect** → **HTTP Service [Port 8888]**
+2. Open your notebook
+3. Click **Kernel** → **Change Kernel** → **Python (semantic-id-recommender)**
 
-**Using W&B (Recommended)**
-```bash
-# W&B will log metrics automatically
-# View at: https://wandb.ai/your-username/semantic-id-recommender
-```
+### Step 9: Monitor Training
 
-**Using Terminal Output**
 ```bash
 # Training progress is shown in real-time
 # Watch GPU usage:
 watch -n 1 nvidia-smi
 ```
 
-### Step 9: Stop Your Pod
+### Step 10: Stop Your Pod
 
 **Important**: RunPod charges per minute while pod is running!
 

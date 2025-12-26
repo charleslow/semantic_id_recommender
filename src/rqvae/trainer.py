@@ -56,7 +56,7 @@ class RQVAETrainer(L.LightningModule):
         )
         self.log(f"{stage}/avg_codebook_usage", codebook_stats["avg_usage"])
 
-        # Log per-level stats
+        # Log per quantizer level stats
         for q_idx in range(self.config.num_quantizers):
             self.log(
                 f"{stage}/perplexity_level_{q_idx}",
