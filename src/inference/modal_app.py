@@ -9,6 +9,8 @@ from pathlib import Path
 
 import modal
 
+from src.llm.data import REC_TOKEN
+
 # Modal app configuration
 app = modal.App("semantic-id-recommender")
 
@@ -101,19 +103,27 @@ class Recommender:
             self.catalogue = {}
 
     def _format_prompt(self, query: str) -> str:
-        """Format query into model prompt."""
+        """Format query into model prompt.
+
+        Appends [REC] token to user query to trigger semantic ID generation.
+        """
         system_prompt = (
             "You are a recommendation system. Given a user query, "
             "output the semantic ID of the most relevant item. "
             "Respond only with the semantic ID tokens."
         )
-        return f"<|system|>\n{system_prompt}\n<|user|>\n{query}\n<|assistant|>\n"
+        # Append [REC] token to user query to trigger semantic ID generation
+        return f"<|system|>\n{system_prompt}\n<|user|>\n{query}{REC_TOKEN}\n<|assistant|>\n"
 
     def _parse_semantic_id(self, output: str) -> str | None:
-        """Extract semantic ID from model output."""
+        """Extract semantic ID from model output.
+
+        Handles output with or without [REC] prefix.
+        """
         import re
 
         # Extract full semantic ID including [SEM_START] and [SEM_END]
+        # The [REC] token is already in the prompt, so output starts directly with semantic ID
         pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
         match = re.search(pattern, output)
 

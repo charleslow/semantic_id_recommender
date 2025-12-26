@@ -93,7 +93,33 @@ This file handles the preparation of training data for the LLM finetune to learn
 - Also adds the string `semantic_id` as a field
 - In `strict` mode, we raise an error if any item has no semantic ID
 
-`generate_training_examples`
+`generate_training_examples`: based on the catalogue of items, generates training examples in the form of query and response.
+- There are two categories of training data:
+    - `predict_semantic_id`: the task is to predict a `semantic_id` given the query. For example, "What is the semantic ID of {title}?"
+    - `predict_attribute`: the task is to predict a field attribute given the `semantic_id` of an item. For example, "What is the {field_name} of {semantic_id}?"
+- The user specifies these with a list of `query_templates`, which will be randomly selected for each training example
+- We return `num_examples_per_item` of examples per item in the catalogue.
+- Note that for the `predict_semantic_id` task, we append special `[REC]` token to the end of query to trigger recommendation behaviour
+
+`format_as_messages`: a simple formatting function to get the `query` and `response` from the generated examples and put them into the `messages` format using `user` and `assistant`. Also adds a simple system prompt.
+
+`prepare_training_data`: uses the functions above and generates the training and validation datasets.
+- Calls `load_catalogue_with_semantic_ids` to load the item catalogue
+- Calls `generate_training_data` to generate examples
+- Calls `format_as_messages` to put into message format
+- Shuffles and splits into train and val
+- Writes into output jsonl files
+
+`SemanticIDDataset`: a simple torch dataset to yield examples from the training and val examples defined above.
+- Note that each item contains:
+    - `messages`: the list of `system`, `user`, `assistant` messages for training
+    - `query`
+    - `response`
+    - `type`: e.g. `predict_semantic_id`
+    - `item_id`
+
+
+
 
 
 
