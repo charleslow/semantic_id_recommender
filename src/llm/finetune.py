@@ -28,22 +28,22 @@ def add_semantic_tokens(tokenizer, num_quantizers: int = 4, codebook_size: int =
     return tokenizer
 
 
-def formatting_prompts_func(examples):
-    """Format examples for training using chat template."""
-    output_texts = []
-    for messages in examples["messages"]:
-        text = ""
-        for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            if role == "system":
-                text += f"<|system|>\n{content}\n"
-            elif role == "user":
-                text += f"<|user|>\n{content}\n"
-            elif role == "assistant":
-                text += f"<|assistant|>\n{content}\n"
-        output_texts.append(text)
-    return output_texts
+def create_formatting_func(tokenizer):
+    """Create a formatting function that uses the tokenizer's chat template."""
+
+    def formatting_prompts_func(examples):
+        """Format examples for training using the tokenizer's chat template."""
+        output_texts = []
+        for messages in examples["messages"]:
+            text = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            output_texts.append(text)
+        return output_texts
+
+    return formatting_prompts_func
 
 
 def finetune_model(
@@ -143,6 +143,9 @@ def finetune_model(
         hub_model_id=hub_repo,
     )
 
+    # Create formatting function with tokenizer's chat template
+    formatting_func = create_formatting_func(tokenizer)
+
     # Create trainer
     trainer = SFTTrainer(
         model=model,
@@ -150,7 +153,7 @@ def finetune_model(
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         args=training_args,
-        formatting_func=formatting_prompts_func,
+        formatting_func=formatting_func,
         max_seq_length=max_seq_length,
         packing=False,
     )
@@ -242,9 +245,10 @@ class SemanticIDGenerator:
         self.eos_token_id = tokenizer.eos_token_id
 
         self.system_prompt = (
-            "You are a recommendation system. Given a user query, "
-            "output the semantic ID of the most relevant item. "
-            "Respond only with the semantic ID tokens."
+            "You are a recommendation system. You can:\n"
+            "1. Given item attributes, output the semantic ID\n"
+            "2. Given a semantic ID, output item attributes\n"
+            "Respond only with the requested information."
         )
 
     def _get_allowed_tokens_for_position(self, position: int) -> list[int]:
@@ -301,22 +305,29 @@ class SemanticIDGenerator:
         """Extract semantic ID from generated text."""
         import re
 
-        if "<|assistant|>" in generated_text:
-            semantic_id = generated_text.split("<|assistant|>")[-1].strip()
-        else:
-            semantic_id = generated_text.strip()
-
         # Clean up EOS token if present
         if self.tokenizer.eos_token:
-            semantic_id = semantic_id.replace(self.tokenizer.eos_token, "").strip()
+            generated_text = generated_text.replace(self.tokenizer.eos_token, "").strip()
 
         # Extract full semantic ID including [SEM_START] and [SEM_END]
         pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
-        match = re.search(pattern, semantic_id)
+        match = re.search(pattern, generated_text)
         if match:
             return match.group(0)
 
-        return semantic_id
+        return generated_text.strip()
+
+    def _build_prompt(self, query: str) -> str:
+        """Build prompt using the tokenizer's chat template."""
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": query},
+        ]
+        return self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
 
     def generate(
         self,
@@ -333,7 +344,7 @@ class SemanticIDGenerator:
         Returns:
             Generated semantic ID string
         """
-        prompt = f"<|system|>\n{self.system_prompt}\n<|user|>\n{query}\n<|assistant|>\n"
+        prompt = self._build_prompt(query)
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
 
         if self.use_constrained_decoding:
@@ -374,7 +385,7 @@ class SemanticIDGenerator:
         Returns:
             List of (semantic_id, score) tuples, sorted by score (highest first)
         """
-        prompt = f"<|system|>\n{self.system_prompt}\n<|user|>\n{query}\n<|assistant|>\n"
+        prompt = self._build_prompt(query)
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
 
         outputs = self.model.generate(
@@ -445,13 +456,24 @@ def generate_semantic_id(
     Returns:
         Generated semantic ID string
     """
+    import re
+
     system_prompt = (
-        "You are a recommendation system. Given a user query, "
-        "output the semantic ID of the most relevant item. "
-        "Respond only with the semantic ID tokens."
+        "You are a recommendation system. You can:\n"
+        "1. Given item attributes, output the semantic ID\n"
+        "2. Given a semantic ID, output item attributes\n"
+        "Respond only with the requested information."
     )
 
-    prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{query}\n<|assistant|>\n"
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": query},
+    ]
+    prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
 
@@ -465,10 +487,15 @@ def generate_semantic_id(
 
     # Decode and extract semantic ID
     generated = tokenizer.decode(outputs[0], skip_special_tokens=False)
-    # Extract part after <|assistant|>
-    if "<|assistant|>" in generated:
-        semantic_id = generated.split("<|assistant|>")[-1].strip()
-    else:
-        semantic_id = generated[len(prompt) :].strip()
 
-    return semantic_id
+    # Clean up EOS token if present
+    if tokenizer.eos_token:
+        generated = generated.replace(tokenizer.eos_token, "").strip()
+
+    # Extract full semantic ID including [SEM_START] and [SEM_END]
+    pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
+    match = re.search(pattern, generated)
+    if match:
+        return match.group(0)
+
+    return generated.strip()

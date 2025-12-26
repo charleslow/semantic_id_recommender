@@ -1,3 +1,4 @@
 - Add special `|<rec>|` token to trigger recommendation
-- Test fine-tuning on runpod
 - Split wandb run between stages
+- Add two separate LLM fine-tuning stages, first with freezing the backbone and the other without
+- Remove constrained decoding and use beam search to handle

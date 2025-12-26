@@ -17,9 +17,9 @@ def load_catalogue_with_semantic_ids(
     semantic_ids_path: str | Path,
     strict: bool = True,
     id_field: str = "id",
-) -> list[dict]:
+) -> Dataset:
     """
-    Load catalogue items with their semantic IDs.
+    Load catalogue items with their semantic IDs incrementally into a HuggingFace Dataset.
 
     Args:
         catalogue_path: Path to catalogue JSON/JSONL
@@ -28,171 +28,196 @@ def load_catalogue_with_semantic_ids(
         id_field: Name of the field containing item IDs (default: "id")
 
     Returns:
-        List of items with semantic_id field added
+        HuggingFace Dataset with semantic_id field added to each item
 
     Raises:
         ValueError: If strict=True and catalogue/semantic IDs don't match up
     """
-    # Load catalogue
     catalogue_path = Path(catalogue_path)
-    if catalogue_path.suffix == ".jsonl":
-        items = []
-        with open(catalogue_path) as f:
-            for line in f:
-                items.append(json.loads(line))
-    else:
-        with open(catalogue_path) as f:
-            data = json.load(f)
-            items = data if isinstance(data, list) else data.get("items", [])
 
-    # Load semantic IDs
+    if not catalogue_path.suffix == ".jsonl":
+        raise NotImplementedError("Only JSONL catalogue format is supported currently.")
+
     with open(semantic_ids_path) as f:
         semantic_mapping = json.load(f)
-
     item_to_semantic = semantic_mapping["item_to_semantic"]
 
-    # Validate matching
-    catalogue_ids = {
-        str(item.get(id_field, "")) for item in items if item.get(id_field)
-    }
-    semantic_ids = set(item_to_semantic.keys())
+    def generate_items():
+        """Generator that yields items with semantic IDs."""
 
-    missing_in_semantic = catalogue_ids - semantic_ids
-    extra_in_semantic = semantic_ids - catalogue_ids
+        with open(catalogue_path) as f:
+            for line in f:
+                item = json.loads(line)
+                item_id = str(item.get(id_field, ""))
+                if item_id in item_to_semantic:
+                    item["semantic_id"] = item_to_semantic[item_id]["semantic_id"]
+                    yield item
+                elif strict:
+                    raise ValueError(
+                        "Found catalogue items without semantic IDs. "
+                        f"Item ID: {item_id}."
+                    )
 
-    if missing_in_semantic:
-        msg = f"Found {len(missing_in_semantic)} catalogue items without semantic IDs"
-        if strict:
-            raise ValueError(
-                f"{msg}. First 10 missing IDs: {list(missing_in_semantic)[:10]}"
-            )
-        else:
-            print(f"Warning: {msg}")
-
-    if extra_in_semantic:
-        print(
-            f"Warning: Found {len(extra_in_semantic)} semantic IDs not in catalogue. "
-            f"First 10 extra IDs: {list(extra_in_semantic)[:10]}"
-        )
-
-    # Merge
-    result = []
-    for item in items:
-        item_id = str(item.get(id_field, ""))
-        if item_id in item_to_semantic:
-            item["semantic_id"] = item_to_semantic[item_id]["semantic_id"]
-            result.append(item)
-
-    if len(result) != len(items):
-        print(f"Loaded {len(result)}/{len(items)} items with semantic IDs")
-
-    return result
+    return Dataset.from_generator(generate_items)
 
 
 def generate_training_examples(
     items: list[dict],
+    query_templates: dict[str, list[str]],
+    field_mapping: dict[str, str] | None = None,
     num_examples_per_item: int = 5,
-    query_templates: list[str] | None = None,
+    id_field: str = "id",
+    predict_semantic_id_ratio: float = 0.8,
 ) -> list[dict]:
     """
     Generate training examples for LLM fine-tuning.
 
-    For cold-start scenario, we create query -> semantic ID pairs using
-    item metadata as the basis for queries.
+    Generates two types of examples:
+    1. Predict semantic_id: Given item attributes, predict the semantic ID
+    2. Predict attribute: Given semantic ID, predict an item attribute
 
     Args:
         items: List of items with semantic_id field
         num_examples_per_item: Number of query variations per item
-        query_templates: Custom query templates (optional)
+        query_templates: Dict with two keys:
+                        - "predict_semantic_id": Templates for predicting semantic ID from attributes
+                        - "predict_attribute": Templates for predicting attributes from semantic ID
+
+            For example:
+
+                query_templates = {
+                    "predict_semantic_id": [
+                        "What is the semantic ID of {title}?",
+                        "Find the semantic ID for {title}",
+                        "Semantic ID for: {title}",
+                        "What is the semantic ID for an item with title: {title}?",
+                        "Recommend something like {title}. What is its semantic ID?",
+                        "{title} - what's the semantic ID?",
+                        "Get semantic ID: {description}",
+                        "Item: {title}, {category}. Semantic ID?",
+                    ],
+                    "predict_attribute": [
+                        "What is the {field_name} for semantic ID {semantic_id}?",
+                        "For semantic ID {semantic_id}, what is the {field_name}?",
+                        "Semantic ID {semantic_id}: {field_name}?",
+                        "Get {field_name} for {semantic_id}",
+                        "{semantic_id} - what's the {field_name}?",
+                    ],
+                }
+
+        field_mapping: Mapping from template placeholder names to actual item field names.
+                      E.g., {"title": "name", "description": "desc"} if your items use "name" and "desc"
+                      Default: {"title": "title", "description": "description", "category": "category"}
+        id_field: Name of the field containing item IDs (default: "id")
+        predict_semantic_id_ratio: Ratio of examples that predict semantic_id (default: 0.7)
+                                   Remaining examples will predict attributes
 
     Returns:
-        List of training examples with 'query' and 'semantic_id' fields
+        List of training examples with 'query', 'response', and 'type' fields
     """
-    if query_templates is None:
-        query_templates = [
-            "Find me a {title}",
-            "I'm looking for {title}",
-            "Recommend a {title}",
-            "Show me {title}",
-            "I want {title}",
-            "Search for {title}",
-            "{title}",
-            "{description}",
-            "I need something like {title}",
-            "Find products similar to {title}",
-        ]
+    # If no field_mapping, use field names as-is
+    if field_mapping is None:
+        sample_item = items[0] if items else {}
+        available_fields = sample_item.keys()
+        field_mapping = {field: field for field in available_fields}
 
     examples = []
-
     for item in tqdm(items, desc="Generating training examples"):
         semantic_id = item.get("semantic_id")
         if not semantic_id:
             continue
 
-        # Get item text fields
-        title = item.get("title", item.get("name", ""))
-        description = item.get("description", "")
-        category = item.get("category", "")
+        # Get item text fields using field_mapping
+        field_values = {}
+        for placeholder, field_name in field_mapping.items():
+            field_values[placeholder] = item.get(field_name, "")
 
-        # Generate query variations
-        templates_to_use = random.sample(
-            query_templates,
-            min(num_examples_per_item, len(query_templates)),
-        )
+        # Determine number of each type of example
+        num_predict_semantic = int(num_examples_per_item * predict_semantic_id_ratio)
+        num_predict_attr = num_examples_per_item - num_predict_semantic
 
-        for template in templates_to_use:
-            try:
-                query = template.format(
-                    title=title,
-                    description=description,
-                    category=category,
-                )
-            except KeyError:
-                query = template.format(title=title)
-
-            examples.append(
-                {
-                    "query": query.strip(),
-                    "semantic_id": semantic_id,
-                    "item_id": item.get("id", ""),
-                }
+        # Generate "predict semantic_id" examples
+        if num_predict_semantic > 0:
+            templates_to_use = random.choices(
+                query_templates["predict_semantic_id"],
+                k=min(
+                    num_predict_semantic, len(query_templates["predict_semantic_id"])
+                ),
             )
+            for template in templates_to_use:
+                query = template.format(**field_values)
+                if query.strip():
+                    examples.append(
+                        {
+                            "query": query.strip(),
+                            "response": semantic_id,
+                            "type": "predict_semantic_id",
+                            "item_id": item.get(id_field, ""),
+                        }
+                    )
+
+        # Generate "predict attribute" examples
+        if num_predict_attr > 0:
+            # For each example, pick a random field to predict
+            available_fields = [
+                (placeholder, value)
+                for placeholder, value in field_values.items()
+                if value and value.strip()
+            ]
+
+            for _ in range(num_predict_attr):
+                # Pick random field to predict
+                field_to_predict, field_value = random.choice(available_fields)
+                template = random.choice(query_templates["predict_attribute"])
+                query = template.format(
+                    semantic_id=semantic_id, field_name=field_to_predict
+                )
+                if query.strip() and field_value.strip():
+                    examples.append(
+                        {
+                            "query": query.strip(),
+                            "response": field_value.strip(),
+                            "type": "predict_attribute",
+                            "field_name": field_to_predict,
+                            "item_id": item.get(id_field, ""),
+                        }
+                    )
 
     return examples
 
 
-def format_for_chat(
+def format_as_messages(
     examples: list[dict],
     system_prompt: str | None = None,
 ) -> list[dict]:
     """
-    Format examples for chat-style fine-tuning.
+    Format examples as message lists for chat-style fine-tuning.
 
     Args:
-        examples: Training examples with query and semantic_id
-        system_prompt: Optional system prompt
+        examples: Training examples with query and response
+        system_prompt: Optional system prompt. If None, uses a default prompt that adapts
+                      to both predict_semantic_id and predict_attribute tasks.
 
     Returns:
-        List of chat-formatted examples
+        List of examples with 'messages' field containing role/content dicts
     """
     if system_prompt is None:
         system_prompt = (
-            "You are a recommendation system. Given a user query, "
-            "output the semantic ID of the most relevant item. "
-            "Respond only with the semantic ID tokens."
+            "You are a recommendation system. You can:\n"
+            "1. Given item attributes, output the semantic ID\n"
+            "2. Given a semantic ID, output item attributes\n"
+            "Respond only with the requested information."
         )
 
     formatted = []
     for ex in examples:
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": ex["query"]},
-            {"role": "assistant", "content": ex["semantic_id"]},
-        ]
         formatted.append(
             {
-                "messages": messages,
-                "item_id": ex.get("item_id", ""),
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": ex["query"]},
+                    {"role": "assistant", "content": ex["response"]},
+                ]
             }
         )
 
@@ -204,9 +229,15 @@ def prepare_training_data(
     semantic_ids_path: str | Path,
     output_train_path: str | Path,
     output_val_path: str | Path,
-    num_examples_per_item: int = 3,
+    query_templates: dict[str, list[str]],
+    *,
+    num_examples_per_item: int = 5,
     val_split: float = 0.1,
     seed: int = 42,
+    field_mapping: dict[str, str] | None = None,
+    id_field: str = "id",
+    strict: bool = True,
+    predict_semantic_id_ratio: float = 0.8,
 ) -> tuple[Dataset, Dataset]:
     """
     Prepare training and validation datasets.
@@ -219,22 +250,48 @@ def prepare_training_data(
         num_examples_per_item: Examples per item
         val_split: Validation split ratio
         seed: Random seed
+        query_templates: Custom query templates dict with "predict_semantic_id" and "predict_attribute" keys
+        field_mapping: Mapping from template placeholder names to actual item field names
+        id_field: Name of the field containing item IDs (default: "id")
+        strict: If True, raise error when items don't have semantic IDs
+        predict_semantic_id_ratio: Ratio of examples that predict semantic_id (default: 0.7)
 
     Returns:
         Tuple of (train_dataset, val_dataset)
     """
     random.seed(seed)
 
-    # Load items with semantic IDs
-    items = load_catalogue_with_semantic_ids(catalogue_path, semantic_ids_path)
+    # Load items with semantic IDs as a Dataset
+    items_dataset = load_catalogue_with_semantic_ids(
+        catalogue_path, semantic_ids_path, strict=strict, id_field=id_field
+    )
+    # Convert to list for generate_training_examples (which needs random access for templates)
+    items = list(items_dataset)
     print(f"Loaded {len(items)} items with semantic IDs")
 
     # Generate examples
-    examples = generate_training_examples(items, num_examples_per_item)
+    examples = generate_training_examples(
+        items,
+        num_examples_per_item,
+        query_templates=query_templates,
+        field_mapping=field_mapping,
+        id_field=id_field,
+        predict_semantic_id_ratio=predict_semantic_id_ratio,
+    )
     print(f"Generated {len(examples)} training examples")
 
-    # Format for chat
-    formatted = format_for_chat(examples)
+    # Print distribution of example types
+    predict_sem_count = sum(
+        1 for ex in examples if ex.get("type") == "predict_semantic_id"
+    )
+    predict_attr_count = sum(
+        1 for ex in examples if ex.get("type") == "predict_attribute"
+    )
+    print(f"  - {predict_sem_count} predict semantic_id examples")
+    print(f"  - {predict_attr_count} predict attribute examples")
+
+    # Format as messages
+    formatted = format_as_messages(examples)
 
     # Shuffle and split
     random.shuffle(formatted)

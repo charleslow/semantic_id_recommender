@@ -85,6 +85,16 @@ Contains the lightning module for training the `RQVAE` model:
     - Computes `loss = recon_loss + commit_loss`
     - Uses `model.compute_codebook_stats` to get codebook stats and log them
 
+### src/llm/data.py
+
+This file handles the preparation of training data for the LLM finetune to learn semantic IDs.
+
+`load_catalogue_with_semantic_ids`: Loads the catalogue of items into a huggingface dataset.
+- Also adds the string `semantic_id` as a field
+- In `strict` mode, we raise an error if any item has no semantic ID
+
+`generate_training_examples`
+
 
 
 
