@@ -21,7 +21,7 @@ class SemanticRQVAEConfig:
     codebook_size: int = 256  # Size of each codebook
     num_quantizers: int = 4  # Number of residual quantization levels
     commitment_weight: float = 0.25  # Commitment loss weight
-    decay: float = 0.99  # EMA decay for codebook updates
+    decay: float = 0.999  # EMA decay for codebook updates
     threshold_ema_dead_code: int = 1  # Reset codes used fewer than this many times
 
 
@@ -48,7 +48,6 @@ class SemanticRQVAE(nn.Module):
             nn.Linear(config.hidden_dim, config.hidden_dim),
         )
 
-        # Residual Vector Quantizer
         self.rq = ResidualVQ(
             dim=config.hidden_dim,
             codebook_size=config.codebook_size,
@@ -92,9 +91,7 @@ class SemanticRQVAE(nn.Module):
         # Remove seq_len dimension
         quantized = quantized.squeeze(1)
         indices = indices.squeeze(1)
-        # Sum commitment losses across quantizers if tensor
-        if commit_loss.dim() > 0:
-            commit_loss = commit_loss.sum()
+        commit_loss = commit_loss.sum()  # Sum over quantizer levels and batch
         return quantized, indices, commit_loss
 
     def decode(self, quantized: torch.Tensor) -> torch.Tensor:
@@ -146,15 +143,42 @@ class SemanticRQVAE(nn.Module):
         Returns:
             List of semantic ID strings like "[SEM_0_42][SEM_1_156][SEM_2_89][SEM_3_3]"
         """
-        batch_size = indices.shape[0]
+        indices_list = indices.cpu().tolist()
         results = []
-        for i in range(batch_size):
-            tokens = []
-            for q_idx in range(self.config.num_quantizers):
-                code = indices[i, q_idx].item()
-                tokens.append(f"[SEM_{q_idx}_{code}]")
+        for codes in indices_list:
+            tokens = [f"[SEM_{q_idx}_{code}]" for q_idx, code in enumerate(codes)]
             results.append("".join(tokens))
         return results
+
+    def string_to_semantic_id(self, s: str) -> list[int] | None:
+        """
+        Parse semantic ID string back to indices.
+
+        Args:
+            s: Semantic ID string like "[SEM_0_42][SEM_1_156][SEM_2_89][SEM_3_3]"
+
+        Returns:
+            List of code indices, or None if parsing fails
+        """
+        import re
+
+        pattern = r"\[SEM_(\d+)_(\d+)\]"
+        matches = re.findall(pattern, s)
+
+        if len(matches) != self.config.num_quantizers:
+            return None
+
+        codes = [None] * self.config.num_quantizers
+        for q_idx, code in matches:
+            q_idx, code = int(q_idx), int(code)
+            if q_idx >= self.config.num_quantizers:
+                return None
+            codes[q_idx] = code
+
+        if None in codes:
+            return None
+
+        return codes
 
     def compute_codebook_stats(self, indices: torch.Tensor) -> dict[str, torch.Tensor]:
         """
@@ -175,36 +199,27 @@ class SemanticRQVAE(nn.Module):
             - usage_per_level: Fraction of codes used per level
             - avg_usage: Average usage fraction across all levels
         """
-        batch_size = indices.shape[0]
         num_quantizers = indices.shape[1]
         codebook_size = self.config.codebook_size
 
         perplexities = []
         usage_fractions = []
-
         for q_idx in range(num_quantizers):
-            # Get indices for this quantizer level
             level_indices = indices[:, q_idx]
-
-            # Count occurrences of each code
             counts = torch.bincount(
                 level_indices.view(-1), minlength=codebook_size
             ).float()
-
-            # Compute probability distribution
             probs = counts / counts.sum()
-
-            # Filter out zero probabilities for log computation
             nonzero_probs = probs[probs > 0]
 
             # Compute entropy: H = -sum(p * log(p))
+            # It is standard to ignore zero probabilities in entropy calculation
             entropy = -(nonzero_probs * torch.log(nonzero_probs)).sum()
-
             # Perplexity = exp(entropy)
             perplexity = torch.exp(entropy)
             perplexities.append(perplexity)
 
-            # Usage: fraction of codes that are used at least once
+            # Usage: fraction of codes that are used at least once in this batch
             codes_used = (counts > 0).sum().float()
             usage_fraction = codes_used / codebook_size
             usage_fractions.append(usage_fraction)
@@ -212,41 +227,10 @@ class SemanticRQVAE(nn.Module):
         perplexities = torch.stack(perplexities)
         usage_fractions = torch.stack(usage_fractions)
 
+        # Detach stats from computation graph - these are metrics, not for backprop
         return {
-            "perplexity_per_level": perplexities,
-            "avg_perplexity": perplexities.mean(),
-            "usage_per_level": usage_fractions,
-            "avg_usage": usage_fractions.mean(),
+            "perplexity_per_level": perplexities.detach(),
+            "avg_perplexity": perplexities.mean().detach(),
+            "usage_per_level": usage_fractions.detach(),
+            "avg_usage": usage_fractions.mean().detach(),
         }
-
-    @staticmethod
-    def string_to_semantic_id(s: str, num_quantizers: int = 4) -> list[int] | None:
-        """
-        Parse semantic ID string back to indices.
-
-        Args:
-            s: Semantic ID string like "[SEM_0_42][SEM_1_156][SEM_2_89][SEM_3_3]"
-            num_quantizers: Expected number of quantizers
-
-        Returns:
-            List of code indices, or None if parsing fails
-        """
-        import re
-
-        pattern = r"\[SEM_(\d+)_(\d+)\]"
-        matches = re.findall(pattern, s)
-
-        if len(matches) != num_quantizers:
-            return None
-
-        codes = [None] * num_quantizers
-        for q_idx, code in matches:
-            q_idx, code = int(q_idx), int(code)
-            if q_idx >= num_quantizers:
-                return None
-            codes[q_idx] = code
-
-        if None in codes:
-            return None
-
-        return codes

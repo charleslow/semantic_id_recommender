@@ -82,21 +82,21 @@ class TestSemanticRQVAE:
         strings = model.semantic_id_to_string(indices)
 
         for i, s in enumerate(strings):
-            parsed = SemanticRQVAE.string_to_semantic_id(s, config.num_quantizers)
+            parsed = model.string_to_semantic_id(s)
             assert parsed is not None
             assert parsed == indices[i].tolist()
 
-    def test_string_to_semantic_id_invalid(self, config):
+    def test_string_to_semantic_id_invalid(self, model):
         """Test parsing of invalid semantic ID strings."""
         # Missing tokens
-        assert SemanticRQVAE.string_to_semantic_id("[SEM_0_1]", config.num_quantizers) is None
+        assert model.string_to_semantic_id("[SEM_0_1]") is None
 
         # Invalid format
-        assert SemanticRQVAE.string_to_semantic_id("invalid", config.num_quantizers) is None
+        assert model.string_to_semantic_id("invalid") is None
 
-        # Wrong number of quantizers
+        # Wrong number of quantizers (assuming model has 4 quantizers)
         s = "[SEM_0_1][SEM_1_2]"
-        assert SemanticRQVAE.string_to_semantic_id(s, 4) is None
+        assert model.string_to_semantic_id(s) is None
 
     def test_encode_decode(self, model, sample_embeddings, config):
         """Test encode-decode path."""
