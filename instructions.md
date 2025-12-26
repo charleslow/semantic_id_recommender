@@ -78,6 +78,7 @@ ssh root@<ip-address> -p <port> -i ~/.ssh/id_ed25519
 # Save these for later use:
 export POD_IP="<ip-address>"
 export POD_PORT="22022"
+ssh root@"$POD_IP" -p "$POD_PORT" -i ~/.ssh/id_ed25519
 ```
 
 ### Step 4: Setup the Environment
@@ -86,7 +87,7 @@ On the RunPod pod, clone the repository and install dependencies:
 
 ```bash
 # Clone the code repository
-cd workspace
+cd /workspace
 git clone https://github.com/charleslow/semantic_id_recommender
 cd semantic_id_recommender
 
@@ -113,7 +114,7 @@ scp -P ${POD_PORT} -i ~/.ssh/id_ed25519 \
 
 # Verify files transferred
 ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519 \
-  "ls -lh ~/semantic_id_recommender/data/"
+  "ls -lh /workspace/semantic_id_recommender/data/"
 ```
 
 **Note**: Use the **SSH over exposed TCP** connection (direct IP and port) from Step 3.
