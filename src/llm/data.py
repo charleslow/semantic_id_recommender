@@ -15,6 +15,8 @@ from tqdm import tqdm
 def load_catalogue_with_semantic_ids(
     catalogue_path: str | Path,
     semantic_ids_path: str | Path,
+    strict: bool = True,
+    id_field: str = "id",
 ) -> list[dict]:
     """
     Load catalogue items with their semantic IDs.
@@ -22,9 +24,14 @@ def load_catalogue_with_semantic_ids(
     Args:
         catalogue_path: Path to catalogue JSON/JSONL
         semantic_ids_path: Path to semantic ID mapping JSON
+        strict: If True, raise error when items don't have semantic IDs. If False, skip missing items.
+        id_field: Name of the field containing item IDs (default: "id")
 
     Returns:
         List of items with semantic_id field added
+
+    Raises:
+        ValueError: If strict=True and catalogue/semantic IDs don't match up
     """
     # Load catalogue
     catalogue_path = Path(catalogue_path)
@@ -44,20 +51,47 @@ def load_catalogue_with_semantic_ids(
 
     item_to_semantic = semantic_mapping["item_to_semantic"]
 
+    # Validate matching
+    catalogue_ids = {
+        str(item.get(id_field, "")) for item in items if item.get(id_field)
+    }
+    semantic_ids = set(item_to_semantic.keys())
+
+    missing_in_semantic = catalogue_ids - semantic_ids
+    extra_in_semantic = semantic_ids - catalogue_ids
+
+    if missing_in_semantic:
+        msg = f"Found {len(missing_in_semantic)} catalogue items without semantic IDs"
+        if strict:
+            raise ValueError(
+                f"{msg}. First 10 missing IDs: {list(missing_in_semantic)[:10]}"
+            )
+        else:
+            print(f"Warning: {msg}")
+
+    if extra_in_semantic:
+        print(
+            f"Warning: Found {len(extra_in_semantic)} semantic IDs not in catalogue. "
+            f"First 10 extra IDs: {list(extra_in_semantic)[:10]}"
+        )
+
     # Merge
     result = []
     for item in items:
-        item_id = str(item.get("id", ""))
+        item_id = str(item.get(id_field, ""))
         if item_id in item_to_semantic:
             item["semantic_id"] = item_to_semantic[item_id]["semantic_id"]
             result.append(item)
+
+    if len(result) != len(items):
+        print(f"Loaded {len(result)}/{len(items)} items with semantic IDs")
 
     return result
 
 
 def generate_training_examples(
     items: list[dict],
-    num_examples_per_item: int = 3,
+    num_examples_per_item: int = 5,
     query_templates: list[str] | None = None,
 ) -> list[dict]:
     """
@@ -116,11 +150,13 @@ def generate_training_examples(
             except KeyError:
                 query = template.format(title=title)
 
-            examples.append({
-                "query": query.strip(),
-                "semantic_id": semantic_id,
-                "item_id": item.get("id", ""),
-            })
+            examples.append(
+                {
+                    "query": query.strip(),
+                    "semantic_id": semantic_id,
+                    "item_id": item.get("id", ""),
+                }
+            )
 
     return examples
 
@@ -153,10 +189,12 @@ def format_for_chat(
             {"role": "user", "content": ex["query"]},
             {"role": "assistant", "content": ex["semantic_id"]},
         ]
-        formatted.append({
-            "messages": messages,
-            "item_id": ex.get("item_id", ""),
-        })
+        formatted.append(
+            {
+                "messages": messages,
+                "item_id": ex.get("item_id", ""),
+            }
+        )
 
     return formatted
 
