@@ -64,7 +64,7 @@ Some utility functions:
     - Returns semantic ID integer codes `indices: (batch_size, num_quantizers)`
 - `semantic_id_to_string(indices)`: convert semantic ID integer codes to string for LLM usage
     - `indices: (batch_size, num_quantizers)`
-    - Returns `results: list[str] (batch_size)` containing string representation of each item in batch, e.g. `[SEM_0_1][SEM_1_2]` etc.
+    - Returns `results: list[str] (batch_size)` containing string representation of each item in batch, e.g. `[SEM_START][SEM_0_1][SEM_1_2][SEM_END]` etc.
 - `string_to_semantic_id(s: str)`: parse semantic ID string back into integer codes
     - Uses regex-based parsing
     - Returns a `list[int]` of integer codes
@@ -77,6 +77,9 @@ Some utility functions:
         - Entropy is `sum(-p log p)` over each code in the level, ranges from `0` to `log K` where `K` is the number of codes
         - Perplexity ranges from `1` (single point, bad) to `K` (uniformly distributed)
 
+### src/rqvae/trainer.py
+
+Contains the lightning module for training the `RQVAE` model
 
 
 

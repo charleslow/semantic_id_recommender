@@ -72,9 +72,12 @@ class TestSemanticRQVAE:
         assert len(strings) == sample_embeddings.shape[0]
         assert all("[SEM_" in s for s in strings)
 
-        # Check format: [SEM_0_X][SEM_1_X][SEM_2_X][SEM_3_X]
+        # Check format: [SEM_START][SEM_0_X][SEM_1_X][SEM_2_X][SEM_3_X][SEM_END]
         for s in strings:
-            assert s.count("[SEM_") == model.config.num_quantizers
+            assert s.startswith("[SEM_START]")
+            assert s.endswith("[SEM_END]")
+            # Count should be num_quantizers + 2 (for START and END)
+            assert s.count("[SEM_") == model.config.num_quantizers + 2
 
     def test_string_to_semantic_id_roundtrip(self, model, sample_embeddings, config):
         """Test roundtrip conversion string <-> indices."""
@@ -88,14 +91,20 @@ class TestSemanticRQVAE:
 
     def test_string_to_semantic_id_invalid(self, model):
         """Test parsing of invalid semantic ID strings."""
-        # Missing tokens
+        # Missing START token
+        assert model.string_to_semantic_id("[SEM_0_1][SEM_END]") is None
+
+        # Missing END token
+        assert model.string_to_semantic_id("[SEM_START][SEM_0_1]") is None
+
+        # Missing both START and END
         assert model.string_to_semantic_id("[SEM_0_1]") is None
 
         # Invalid format
         assert model.string_to_semantic_id("invalid") is None
 
         # Wrong number of quantizers (assuming model has 4 quantizers)
-        s = "[SEM_0_1][SEM_1_2]"
+        s = "[SEM_START][SEM_0_1][SEM_1_2][SEM_END]"
         assert model.string_to_semantic_id(s) is None
 
     def test_encode_decode(self, model, sample_embeddings, config):

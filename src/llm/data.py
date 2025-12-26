@@ -269,9 +269,9 @@ def get_semantic_id_tokens(
         codebook_size: Size of each codebook
 
     Returns:
-        List of special tokens like ["[SEM_0_0]", "[SEM_0_1]", ...]
+        List of special tokens like ["[SEM_START]", "[SEM_END]", "[SEM_0_0]", "[SEM_0_1]", ...]
     """
-    tokens = []
+    tokens = ["[SEM_START]", "[SEM_END]"]
     for q in range(num_quantizers):
         for c in range(codebook_size):
             tokens.append(f"[SEM_{q}_{c}]")

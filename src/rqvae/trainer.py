@@ -26,61 +26,54 @@ class RQVAETrainer(L.LightningModule):
     def forward(self, x: torch.Tensor):
         return self.model(x)
 
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+    def _shared_step(self, batch: torch.Tensor, stage: str) -> torch.Tensor:
+        """
+        Shared step logic for training and validation.
+
+        Args:
+            batch: Input embeddings
+            stage: Either "train" or "val"
+
+        Returns:
+            Total loss (reconstruction + commitment)
+        """
         embeddings = batch
         _, indices, recon_loss, commit_loss = self.model(embeddings)
 
         loss = recon_loss + commit_loss
 
-        self.log("train/recon_loss", recon_loss, prog_bar=True)
-        self.log("train/commit_loss", commit_loss, prog_bar=True)
-        self.log("train/loss", loss, prog_bar=True)
+        # Log losses
+        self.log(f"{stage}/recon_loss", recon_loss, prog_bar=True)
+        self.log(f"{stage}/commit_loss", commit_loss, prog_bar=stage == "train")
+        self.log(f"{stage}/loss", loss, prog_bar=True)
 
         # Track codebook usage and perplexity
         codebook_stats = self.model.compute_codebook_stats(indices)
-        self.log("train/avg_perplexity", codebook_stats["avg_perplexity"])
-        self.log("train/avg_codebook_usage", codebook_stats["avg_usage"])
+        self.log(
+            f"{stage}/avg_perplexity",
+            codebook_stats["avg_perplexity"],
+            prog_bar=stage == "val",
+        )
+        self.log(f"{stage}/avg_codebook_usage", codebook_stats["avg_usage"])
 
         # Log per-level stats
         for q_idx in range(self.config.num_quantizers):
             self.log(
-                f"train/perplexity_level_{q_idx}",
+                f"{stage}/perplexity_level_{q_idx}",
                 codebook_stats["perplexity_per_level"][q_idx],
             )
             self.log(
-                f"train/usage_level_{q_idx}",
+                f"{stage}/usage_level_{q_idx}",
                 codebook_stats["usage_per_level"][q_idx],
             )
 
         return loss
 
-    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        embeddings = batch
-        _, indices, recon_loss, commit_loss = self.model(embeddings)
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:  # noqa: ARG002
+        return self._shared_step(batch, "train")
 
-        loss = recon_loss + commit_loss
-
-        self.log("val/recon_loss", recon_loss, prog_bar=True)
-        self.log("val/commit_loss", commit_loss)
-        self.log("val/loss", loss, prog_bar=True)
-
-        # Track codebook usage and perplexity
-        codebook_stats = self.model.compute_codebook_stats(indices)
-        self.log("val/avg_perplexity", codebook_stats["avg_perplexity"], prog_bar=True)
-        self.log("val/avg_codebook_usage", codebook_stats["avg_usage"])
-
-        # Log per-level stats
-        for q_idx in range(self.config.num_quantizers):
-            self.log(
-                f"val/perplexity_level_{q_idx}",
-                codebook_stats["perplexity_per_level"][q_idx],
-            )
-            self.log(
-                f"val/usage_level_{q_idx}",
-                codebook_stats["usage_per_level"][q_idx],
-            )
-
-        return loss
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:  # noqa: ARG002
+        return self._shared_step(batch, "val")
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -150,18 +143,16 @@ class RQVAETrainer(L.LightningModule):
             if idx in semantic_ids:
                 codes = semantic_ids[idx]
                 # Create both directions of mapping
-                semantic_str = self.model.semantic_id_to_string(
-                    torch.tensor([codes])
-                )[0]
+                semantic_str = self.model.semantic_id_to_string(torch.tensor([codes]))[
+                    0
+                ]
                 mapping[str(item_id)] = {
                     "codes": codes,
                     "semantic_id": semantic_str,
                 }
 
         # Also create reverse mapping (semantic_id -> item_id)
-        reverse_mapping = {
-            v["semantic_id"]: str(k) for k, v in mapping.items()
-        }
+        reverse_mapping = {v["semantic_id"]: str(k) for k, v in mapping.items()}
 
         output = {
             "item_to_semantic": mapping,

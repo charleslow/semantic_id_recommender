@@ -113,12 +113,12 @@ class Recommender:
         """Extract semantic ID from model output."""
         import re
 
-        # Find all semantic ID tokens
-        pattern = r"\[SEM_\d+_\d+\]"
-        matches = re.findall(pattern, output)
+        # Extract full semantic ID including [SEM_START] and [SEM_END]
+        pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
+        match = re.search(pattern, output)
 
-        if matches:
-            return "".join(matches)
+        if match:
+            return match.group(0)
         return None
 
     @modal.method()

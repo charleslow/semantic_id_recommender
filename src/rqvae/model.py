@@ -141,13 +141,14 @@ class SemanticRQVAE(nn.Module):
             indices: Semantic ID codes [batch_size, num_quantizers]
 
         Returns:
-            List of semantic ID strings like "[SEM_0_42][SEM_1_156][SEM_2_89][SEM_3_3]"
+            List of semantic ID strings like "[SEM_START][SEM_0_42][SEM_1_156][SEM_2_89][SEM_3_3][SEM_END]"
         """
         indices_list = indices.cpu().tolist()
         results = []
         for codes in indices_list:
             tokens = [f"[SEM_{q_idx}_{code}]" for q_idx, code in enumerate(codes)]
-            results.append("".join(tokens))
+            semantic_id = "[SEM_START]" + "".join(tokens) + "[SEM_END]"
+            results.append(semantic_id)
         return results
 
     def string_to_semantic_id(self, s: str) -> list[int] | None:
@@ -155,15 +156,21 @@ class SemanticRQVAE(nn.Module):
         Parse semantic ID string back to indices.
 
         Args:
-            s: Semantic ID string like "[SEM_0_42][SEM_1_156][SEM_2_89][SEM_3_3]"
+            s: Semantic ID string like "[SEM_START][SEM_0_42][SEM_1_156][SEM_2_89][SEM_3_3][SEM_END]"
 
         Returns:
             List of code indices, or None if parsing fails
         """
         import re
 
+        if not s.startswith("[SEM_START]") or not s.endswith("[SEM_END]"):
+            return None
+
+        # Extract the content between [SEM_START] and [SEM_END]
+        content = s[len("[SEM_START]") : -len("[SEM_END]")]
+
         pattern = r"\[SEM_(\d+)_(\d+)\]"
-        matches = re.findall(pattern, s)
+        matches = re.findall(pattern, content)
 
         if len(matches) != self.config.num_quantizers:
             return None

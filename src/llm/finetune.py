@@ -225,6 +225,10 @@ class SemanticIDGenerator:
         self.codebook_size = codebook_size
         self.use_constrained_decoding = use_constrained_decoding
 
+        # Get special token IDs
+        self.sem_start_id = tokenizer.convert_tokens_to_ids("[SEM_START]")
+        self.sem_end_id = tokenizer.convert_tokens_to_ids("[SEM_END]")
+
         # Build semantic token ID lookup
         self.semantic_token_ids = [
             tokenizer.convert_tokens_to_ids(f"[SEM_{q}_{c}]")
@@ -241,24 +245,57 @@ class SemanticIDGenerator:
         )
 
     def _get_allowed_tokens_for_position(self, position: int) -> list[int]:
-        """Return allowed token IDs for each position in the semantic ID."""
-        if position < self.num_quantizers:
-            # Only allow tokens from the correct quantizer level
-            start_idx = position * self.codebook_size
+        """Return allowed token IDs for each position in the semantic ID.
+
+        Sequence format: [SEM_START] [SEM_0_X] [SEM_1_X] ... [SEM_N_X] [SEM_END]
+        Position 0: [SEM_START]
+        Position 1 to N: semantic tokens from correct quantizer
+        Position N+1: [SEM_END]
+        Position N+2: EOS
+        """
+        if position == 0:
+            # First position must be [SEM_START]
+            return [self.sem_start_id]
+        elif position <= self.num_quantizers:
+            # Positions 1 to num_quantizers: semantic tokens
+            quantizer_idx = position - 1
+            start_idx = quantizer_idx * self.codebook_size
             end_idx = start_idx + self.codebook_size
             return self.semantic_token_ids[start_idx:end_idx]
+        elif position == self.num_quantizers + 1:
+            # After all quantizers, must be [SEM_END]
+            return [self.sem_end_id]
         else:
-            # After all quantizers, only allow EOS
+            # After [SEM_END], only allow EOS
             return [self.eos_token_id]
 
     def _prefix_allowed_tokens_fn(self, batch_id: int, input_ids) -> list[int]:
         """Constrained decoding: only allow valid semantic ID tokens in sequence."""
         generated = input_ids.tolist()
+
+        # Count how many semantic tokens have been generated
+        # Position 0: [SEM_START]
+        # Position 1-N: semantic codes
+        # Position N+1: [SEM_END]
+        # Position N+2: EOS
+
+        has_start = self.sem_start_id in generated
+        has_end = self.sem_end_id in generated
         sem_count = sum(1 for tok_id in generated if tok_id in self.semantic_token_ids_set)
-        return self._get_allowed_tokens_for_position(sem_count)
+
+        if not has_start:
+            position = 0
+        elif not has_end:
+            position = 1 + sem_count
+        else:
+            position = self.num_quantizers + 2
+
+        return self._get_allowed_tokens_for_position(position)
 
     def _extract_semantic_id(self, generated_text: str) -> str:
         """Extract semantic ID from generated text."""
+        import re
+
         if "<|assistant|>" in generated_text:
             semantic_id = generated_text.split("<|assistant|>")[-1].strip()
         else:
@@ -267,6 +304,12 @@ class SemanticIDGenerator:
         # Clean up EOS token if present
         if self.tokenizer.eos_token:
             semantic_id = semantic_id.replace(self.tokenizer.eos_token, "").strip()
+
+        # Extract full semantic ID including [SEM_START] and [SEM_END]
+        pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
+        match = re.search(pattern, semantic_id)
+        if match:
+            return match.group(0)
 
         return semantic_id
 
@@ -291,7 +334,7 @@ class SemanticIDGenerator:
         if self.use_constrained_decoding:
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=self.num_quantizers + 1,
+                max_new_tokens=self.num_quantizers + 3,  # +1 for [SEM_START], +1 for [SEM_END], +1 for EOS
                 do_sample=False,  # Greedy for constrained
                 pad_token_id=self.tokenizer.pad_token_id,
                 prefix_allowed_tokens_fn=self._prefix_allowed_tokens_fn,
@@ -330,7 +373,7 @@ class SemanticIDGenerator:
 
         outputs = self.model.generate(
             **inputs,
-            max_new_tokens=self.num_quantizers + 1,
+            max_new_tokens=self.num_quantizers + 3,  # +1 for [SEM_START], +1 for [SEM_END], +1 for EOS
             num_beams=num_beams,
             num_return_sequences=min(num_return_sequences, num_beams),
             do_sample=False,
