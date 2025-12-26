@@ -24,6 +24,13 @@ This guide walks you through setting up and running the semantic ID recommender 
    - Sign up at https://huggingface.co/join
    - Create an access token at https://huggingface.co/settings/tokens
    - Token needs "Write" permission for pushing models
+   - **Create private repositories for your models**:
+     - Go to https://huggingface.co/new
+     - Repository name: e.g., `semantic-rqvae` or `semantic-recommender`
+     - Type: **Model**
+     - Visibility: **Private** (recommended to keep your models private)
+     - Click "Create repository"
+     - Note your full repo ID: `your-username/semantic-rqvae`
 
 2. **Weights & Biases Account** (free, optional)
    - Sign up at https://wandb.ai/authorize
@@ -52,7 +59,21 @@ This repo is designed for running on runpod.
 1. Sign up at https://www.runpod.io/
 2. Add credits to your account (pay-as-you-go)
 
-### Step 2: Launch a Pod
+### Step 2: Configure Environment Variables (Secrets)
+
+Before launching your pod, set up your API tokens as environment variables so they're available in your pod.
+
+1. Go to **Settings** → **Environment Variables** in RunPod
+2. Add the following environment variables:
+
+| Variable Name | Description | How to Get |
+|---------------|-------------|------------|
+| `HF_TOKEN` | HuggingFace API token | Get from https://huggingface.co/settings/tokens (needs "Write" permission) |
+| `WANDB_API_KEY` | Weights & Biases API key (optional) | Get from https://wandb.ai/authorize |
+
+**Important**: These variables will be automatically injected into all your pods when they start.
+
+### Step 3: Launch a Pod
 
 1. Go to **Pods** → **GPU Instances**
 2. Select a GPU based on your needs:
@@ -62,9 +83,12 @@ This repo is designed for running on runpod.
    - **RunPod PyTorch** (recommended)
    - Or **RunPod Pytorch + JupyterLab** for notebook access
 4. Set disk space: at least **50 GB** for model downloads
-5. Click **Deploy**
+5. **Advanced Options** (optional):
+   - You can also add environment variables per-pod here if you prefer
+   - Add `HF_TOKEN` and `WANDB_API_KEY` in the "Environment Variables" section
+6. Click **Deploy**
 
-### Step 3: Connect to Your Pod
+### Step 4: Connect to Your Pod
 
 Make sure to add your public SSH key to RunPod first (Settings → SSH Keys).
 
@@ -81,7 +105,19 @@ export POD_PORT="22022"
 ssh root@"$POD_IP" -p "$POD_PORT" -i ~/.ssh/id_ed25519
 ```
 
-### Step 4: Setup the Environment
+### Step 5: Verify Environment Variables
+
+After connecting to your pod, verify that your environment variables are set:
+
+```bash
+# Check if HuggingFace token is set
+echo $HF_TOKEN
+
+# Check if Weights & Biases key is set (optional)
+echo $WANDB_API_KEY
+```
+
+### Step 6: Setup the Environment
 
 On the RunPod pod, clone the repository and install dependencies:
 
@@ -101,13 +137,13 @@ uv pip install ipykernel
 python -m ipykernel install --user --name=semantic-id-recommender --display-name="Python (semantic-id-recommender)"
 ```
 
-### Step 5: Transfer Data to RunPod
+### Step 7: Transfer Data to RunPod
 
 From your **local machine**, transfer your data files using scp:
 
 ```bash
 # Transfer data files to RunPod using direct TCP connection
-# Use the POD_IP and POD_PORT from Step 3
+# Use the POD_IP and POD_PORT from Step 4
 scp -P ${POD_PORT} -i ~/.ssh/id_ed25519 \
   data/* \
   root@${POD_IP}:/workspace/semantic_id_recommender/data/
@@ -117,10 +153,10 @@ ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519 \
   "ls -lh /workspace/semantic_id_recommender/data/"
 ```
 
-**Note**: Use the **SSH over exposed TCP** connection (direct IP and port) from Step 3.
+**Note**: Use the **SSH over exposed TCP** connection (direct IP and port) from Step 4.
 
 
-### Step 6: Run Training
+### Step 8: Run Training
 
 #### Train RQ-VAE
 ```bash
@@ -143,22 +179,50 @@ python -m scripts.finetune_llm --base-model "unsloth/Qwen3-4B"
 python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-recommender"
 ```
 
-### Step 7: Save Models
+### Step 9: Save Models to HuggingFace Hub
 
-After training completes, you have two options for saving your models:
+After training completes, push your models to HuggingFace Hub (required for deployment).
 
-**Option A: Push to HuggingFace Hub (Recommended for deployment)**
+**Note**: Your `HF_TOKEN` environment variable from Step 5 will be used automatically.
 
-```bash
-# Set your HuggingFace token
-export HF_TOKEN="hf_..."
+**Create Private HuggingFace Repositories First**
 
-# Use the notebook's upload functions or CLI
-# This makes models accessible for Modal deployment
+Option A - Using HuggingFace UI (Easiest):
+```
+1. Go to https://huggingface.co/new
+2. Repository name: semantic-rqvae (or your preferred name)
+3. Type: Model
+4. Visibility: Private
+5. Click "Create repository"
+6. Note your repo ID: your-username/semantic-rqvae
 ```
 
 
-### Step 8: Access Jupyter (Optional)
+**Upload Your Models**
+
+The `HF_TOKEN` environment variable you set in Step 5 will be used automatically.
+
+```bash
+# For RQ-VAE model - use Python script or notebook
+python -c "
+from src.rqvae.hub import upload_to_hub
+import os
+upload_to_hub(
+    model_dir='models/rqvae_hub',
+    repo_id='your-username/semantic-rqvae',
+    token=os.getenv('HF_TOKEN')
+)
+"
+
+# For fine-tuned LLM - push during training
+# The HF_TOKEN environment variable will be used automatically
+python -m scripts.finetune_llm \
+  --push-to-hub \
+  --hub-repo "your-username/semantic-recommender"
+```
+
+
+### Step 10: Access Jupyter (Optional)
 
 If you're using the Jupyter template:
 
@@ -166,7 +230,7 @@ If you're using the Jupyter template:
 2. Open your notebook
 3. Click **Kernel** → **Change Kernel** → **Python (semantic-id-recommender)**
 
-### Step 9: Monitor Training
+### Step 11: Monitor Training
 
 ```bash
 # Training progress is shown in real-time
@@ -174,7 +238,7 @@ If you're using the Jupyter template:
 watch -n 1 nvidia-smi
 ```
 
-### Step 10: Stop Your Pod
+### Step 12: Stop Your Pod
 
 **Important**: RunPod charges per minute while pod is running!
 
@@ -356,7 +420,20 @@ llm:
 3. Fine-tunes with QLoRA using Unsloth
 4. Saves model to `checkpoints/llm/`
 
-### Push to HuggingFace (Optional)
+### Push to HuggingFace Hub
+
+**First, create a private HuggingFace repository:**
+
+```bash
+# Option 1: Using the UI
+# Go to https://huggingface.co/new and create a private Model repository
+
+# Option 2: Using CLI
+huggingface-cli login
+huggingface-cli repo create semantic-recommender --type model --private
+```
+
+**Then push your fine-tuned model:**
 
 ```bash
 python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-recommender"

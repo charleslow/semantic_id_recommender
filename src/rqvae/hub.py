@@ -36,12 +36,13 @@ def save_model_for_hub(
         - rqvae_model.pt: Model checkpoint with config
         - config.json: Model configuration (human-readable)
         - semantic_ids.json: Item to semantic ID mappings (if provided)
-        - README.md: Auto-generated model card
+
+    Note: README.md should be created/edited directly on HuggingFace Hub
     """
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save model checkpoint
+    # Save model checkpoint locally
     checkpoint = {
         "model_state_dict": model.state_dict(),
         "config": {
@@ -69,108 +70,57 @@ def save_model_for_hub(
         semantic_ids_path = Path(semantic_ids_path)
         if semantic_ids_path.exists():
             import shutil
+
             shutil.copy(semantic_ids_path, save_dir / "semantic_ids.json")
 
-    # Create README
-    readme = f"""---
-tags:
-- semantic-ids
-- recommendation
-- rq-vae
-- vector-quantization
-library_name: pytorch
----
-
-# RQ-VAE Semantic ID Model
-
-This model was trained using Residual Vector Quantization (RQ-VAE) to learn semantic IDs for catalogue items.
-
-## Model Details
-
-- **Embedding Dimension**: {model.config.embedding_dim}
-- **Hidden Dimension**: {model.config.hidden_dim}
-- **Codebook Size**: {model.config.codebook_size} codes per level
-- **Number of Quantizers**: {model.config.num_quantizers} levels
-- **Total Semantic ID Space**: {model.config.codebook_size ** model.config.num_quantizers:,} unique IDs
-
-## Usage
-
-```python
-import torch
-from huggingface_hub import hf_hub_download
-
-# Download model
-model_path = hf_hub_download(
-    repo_id="your-username/your-repo",
-    filename="rqvae_model.pt"
-)
-
-# Load checkpoint
-checkpoint = torch.load(model_path)
-
-# Recreate model
-from src.rqvae.model import SemanticRQVAE, SemanticRQVAEConfig
-
-config = SemanticRQVAEConfig(**checkpoint["config"])
-model = SemanticRQVAE(config)
-model.load_state_dict(checkpoint["model_state_dict"])
-model.eval()
-
-# Generate semantic IDs
-with torch.no_grad():
-    embeddings = ...  # Your item embeddings
-    semantic_ids = model.get_semantic_ids(embeddings)
-    semantic_strings = model.semantic_id_to_string(semantic_ids)
-```
-
-## Files
-
-- `rqvae_model.pt`: Model checkpoint with weights and config
-- `config.json`: Model configuration (human-readable)
-- `semantic_ids.json`: Item ID to semantic ID mappings (if available)
-
-## Training Info
-
-"""
-
-    if training_info:
-        for key, value in training_info.items():
-            readme += f"- **{key}**: {value}\n"
-
-    readme += "\n## Citation\n\nIf you use this model, please cite the original RQ-VAE paper and the vector-quantize-pytorch library.\n"
-
-    with open(save_dir / "README.md", "w") as f:
-        f.write(readme)
-
     print(f"✓ Saved model files to {save_dir}")
-    print(f"  - rqvae_model.pt")
-    print(f"  - config.json")
+    print("  - rqvae_model.pt")
+    print("  - config.json")
     if semantic_ids_path and Path(semantic_ids_path).exists():
-        print(f"  - semantic_ids.json")
-    print(f"  - README.md")
+        print("  - semantic_ids.json")
+    print(
+        "\nNote: Create/edit the README.md directly on HuggingFace Hub after uploading."
+    )
 
 
 def upload_to_hub(
     model_dir: str | Path,
     repo_id: str,
     token: Optional[str] = None,
-    private: bool = False,
     commit_message: str = "Upload RQ-VAE model",
 ) -> str:
     """
     Upload model directory to HuggingFace Hub.
 
+    IMPORTANT: This function assumes a private repository has already been created.
+    Create the repo first using the HuggingFace UI or CLI:
+
+    Option 1 - Using HuggingFace UI:
+        1. Go to https://huggingface.co/new
+        2. Enter repository name (e.g., "semantic-rqvae")
+        3. Select "Model" as the repository type
+        4. Check "Make this repository private"
+        5. Click "Create repository"
+
+    Option 2 - Using HuggingFace CLI:
+        huggingface-cli repo create semantic-rqvae --type model --private
+
+    Option 3 - Using Python:
+        from huggingface_hub import HfApi
+        api = HfApi(token="hf_...")
+        api.create_repo(repo_id="username/semantic-rqvae", private=True)
+
     Args:
         model_dir: Directory containing model files (from save_model_for_hub)
-        repo_id: HuggingFace repo ID (username/repo-name)
+        repo_id: HuggingFace repo ID (username/repo-name) - repo must already exist
         token: HuggingFace API token (or use HF_TOKEN env var)
-        private: Whether to create a private repo
         commit_message: Commit message for the upload
 
     Returns:
         URL of the uploaded model repo
 
     Example:
+        >>> # First create the repo (see above)
         >>> upload_to_hub(
         ...     model_dir="models/rqvae_hub",
         ...     repo_id="myusername/semantic-rqvae",
@@ -180,12 +130,23 @@ def upload_to_hub(
     api = HfApi(token=token)
     model_dir = Path(model_dir)
 
-    # Create repo if it doesn't exist
+    # Verify repo exists
     try:
-        api.create_repo(repo_id=repo_id, repo_type="model", private=private, exist_ok=True)
-        print(f"✓ Repository ready: {repo_id}")
+        api.repo_info(repo_id=repo_id, repo_type="model", token=token)
+        print(f"✓ Found existing repository: {repo_id}")
     except Exception as e:
-        print(f"Note: {e}")
+        print(f"✗ Error: Repository '{repo_id}' not found or not accessible.")
+        print("  Please create the private repository first:")
+        print("  1. Go to https://huggingface.co/new")
+        print(
+            f"  2. Create a private Model repository named '{repo_id.split('/')[-1]}'"
+        )
+        print(
+            f"  Or run: huggingface-cli repo create {repo_id.split('/')[-1]} --type model --private"
+        )
+        raise ValueError(
+            f"Repository {repo_id} must be created before uploading"
+        ) from e
 
     # Upload all files in the directory
     api.upload_folder(
@@ -196,7 +157,7 @@ def upload_to_hub(
     )
 
     url = f"https://huggingface.co/{repo_id}"
-    print(f"✓ Model uploaded successfully!")
+    print("✓ Model uploaded successfully!")
     print(f"  View at: {url}")
 
     return url
@@ -261,9 +222,9 @@ def load_from_hub(
         )
         with open(semantic_ids_path) as f:
             semantic_ids = json.load(f)
-        print(f"  ✓ Loaded semantic ID mappings")
+        print("  ✓ Loaded semantic ID mappings")
     except Exception:
-        print(f"  Note: No semantic_ids.json found in repo")
+        print("  Note: No semantic_ids.json found in repo")
 
     return model, semantic_ids
 
