@@ -4,15 +4,15 @@ LLM fine-tuning script using Unsloth.
 Fine-tunes a base model to generate semantic IDs from user queries.
 """
 
-import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import torch
 from datasets import Dataset
-from transformers import PreTrainedTokenizerBase, TrainerCallback
+from transformers import PreTrainedTokenizerBase
 from trl import SFTConfig, SFTTrainer
 
+from .callbacks import RecommendationTestCallback, SemanticIDEvalCallback
 from .data import DEFAULT_SYSTEM_PROMPT, get_semantic_id_tokens
 
 
@@ -70,6 +70,10 @@ class FinetuneConfig:
     report_to: str = "wandb"
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
 
+    # Recommendation test callback settings
+    recommendation_test_queries: list[str] = field(default_factory=list)
+    semantic_id_to_item: dict[str, dict] | None = None
+
 
 def add_semantic_tokens(
     tokenizer: PreTrainedTokenizerBase,
@@ -90,175 +94,6 @@ def add_semantic_tokens(
     special_tokens = get_semantic_id_tokens(num_quantizers, codebook_size)
     tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
     return tokenizer
-
-
-def _parse_semantic_id_tokens(semantic_id: str) -> list[str]:
-    """
-    Parse a semantic ID string into its component tokens.
-
-    Args:
-        semantic_id: String like "[SEM_START][SEM_0_5][SEM_1_10][SEM_END]"
-
-    Returns:
-        List of SEM tokens like ["[SEM_0_5]", "[SEM_1_10]"]
-    """
-    pattern = r"\[SEM_\d+_\d+\]"
-    return re.findall(pattern, semantic_id)
-
-
-def _compute_prefix_accuracy(
-    predictions: list[str],
-    targets: list[str],
-    num_quantizers: int,
-) -> dict[str, float]:
-    """
-    Compute accuracy at each prefix level.
-
-    Args:
-        predictions: List of predicted semantic ID strings
-        targets: List of target semantic ID strings
-        num_quantizers: Number of quantizer levels
-
-    Returns:
-        Dict mapping "prefix_k_accuracy" to accuracy value for k=1..num_quantizers
-    """
-    prefix_correct = {k: 0 for k in range(1, num_quantizers + 1)}
-    total = len(predictions)
-
-    if total == 0:
-        return {f"prefix_{k}_accuracy": 0.0 for k in range(1, num_quantizers + 1)}
-
-    for pred, target in zip(predictions, targets):
-        pred_tokens = _parse_semantic_id_tokens(pred)
-        target_tokens = _parse_semantic_id_tokens(target)
-
-        for k in range(1, num_quantizers + 1):
-            pred_prefix = pred_tokens[:k]
-            target_prefix = target_tokens[:k]
-            if pred_prefix == target_prefix and len(pred_prefix) == k:
-                prefix_correct[k] += 1
-
-    return {
-        f"prefix_{k}_accuracy": prefix_correct[k] / total
-        for k in range(1, num_quantizers + 1)
-    }
-
-
-class SemanticIDEvalCallback(TrainerCallback):
-    """
-    Trainer callback to evaluate semantic ID generation accuracy at each prefix level.
-
-    Only evaluates examples of type "predict_semantic_id".
-    """
-
-    def __init__(
-        self,
-        val_dataset: Dataset,
-        tokenizer: PreTrainedTokenizerBase,
-        num_quantizers: int = 4,
-        max_eval_samples: int = 100,
-        generation_max_new_tokens: int = 32,
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-    ):
-        """
-        Initialize the callback.
-
-        Args:
-            val_dataset: Validation dataset with 'messages' and 'type' fields
-            tokenizer: Tokenizer for generation
-            num_quantizers: Number of RQ-VAE quantizers (prefix levels)
-            max_eval_samples: Maximum samples to evaluate (for speed)
-            generation_max_new_tokens: Max tokens to generate
-            system_prompt: System prompt for generation
-        """
-        self.tokenizer = tokenizer
-        self.num_quantizers = num_quantizers
-        self.max_eval_samples = max_eval_samples
-        self.generation_max_new_tokens = generation_max_new_tokens
-        self.system_prompt = system_prompt
-
-        # Filter for predict_semantic_id examples only
-        if "type" in val_dataset.column_names:
-            self.eval_dataset = val_dataset.filter(
-                lambda x: x["type"] == "predict_semantic_id"
-            )
-        else:
-            self.eval_dataset = val_dataset
-
-        # Limit samples for speed
-        if len(self.eval_dataset) > max_eval_samples:
-            self.eval_dataset = self.eval_dataset.select(range(max_eval_samples))
-
-    def _extract_semantic_id(self, generated_text: str) -> str:
-        """Extract semantic ID from generated text."""
-        if self.tokenizer.eos_token:
-            generated_text = generated_text.replace(
-                self.tokenizer.eos_token, ""
-            ).strip()
-
-        pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
-        match = re.search(pattern, generated_text)
-        if match:
-            return match.group(0)
-        return generated_text.strip()
-
-    def _generate_predictions(self, model) -> tuple[list[str], list[str]]:
-        """Generate predictions for the eval dataset."""
-        predictions = []
-        targets = []
-
-        model.eval()
-        device = next(model.parameters()).device
-
-        for example in self.eval_dataset:
-            messages = example["messages"]
-            # Target is the assistant response
-            target = messages[-1]["content"]
-            targets.append(target)
-
-            # Build prompt without the assistant response
-            prompt_messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": messages[1]["content"]},
-            ]
-            prompt = self.tokenizer.apply_chat_template(
-                prompt_messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
-
-            with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=self.generation_max_new_tokens,
-                    do_sample=False,
-                    pad_token_id=self.tokenizer.pad_token_id,
-                )
-
-            generated = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
-            pred = self._extract_semantic_id(generated)
-            predictions.append(pred)
-
-        return predictions, targets
-
-    def on_evaluate(self, args, state, control, model=None, **kwargs):
-        """Run semantic ID evaluation after each evaluation step."""
-        if model is None:
-            return
-
-        print("\n--- Semantic ID Prefix Accuracy Evaluation ---")
-        predictions, targets = self._generate_predictions(model)
-
-        metrics = _compute_prefix_accuracy(
-            predictions, targets, self.num_quantizers
-        )
-
-        for key, value in metrics.items():
-            print(f"  {key}: {value:.4f}")
-
-        print("----------------------------------------------\n")
 
 
 def create_formatting_func(
@@ -418,6 +253,16 @@ def finetune_model(
             system_prompt=config.system_prompt,
         )
         callbacks.append(semantic_id_eval_callback)
+
+    if config.recommendation_test_queries and config.semantic_id_to_item:
+        recommendation_test_callback = RecommendationTestCallback(
+            test_queries=config.recommendation_test_queries,
+            tokenizer=tokenizer,
+            semantic_id_to_item=config.semantic_id_to_item,
+            num_quantizers=config.num_quantizers,
+            system_prompt=config.system_prompt,
+        )
+        callbacks.append(recommendation_test_callback)
 
     # Create trainer
     trainer = SFTTrainer(
