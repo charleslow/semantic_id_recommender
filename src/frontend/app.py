@@ -42,16 +42,16 @@ def create_demo(
             mapping = json.load(f)
             semantic_to_item = mapping.get("semantic_to_item", {})
 
-    # Local model (lazy loaded)
-    model = None
-    tokenizer = None
+    # Local model and generator (lazy loaded)
+    generator = None
 
-    def load_local_model():
-        nonlocal model, tokenizer
-        if model is None and local_model_path:
-            from src.llm.finetune import load_finetuned_model
+    def load_local_generator():
+        nonlocal generator
+        if generator is None and local_model_path:
+            from src.llm import load_finetuned_model, SemanticIDGenerator
             model, tokenizer = load_finetuned_model(local_model_path)
-        return model, tokenizer
+            generator = SemanticIDGenerator(model, tokenizer)
+        return generator
 
     def recommend_api(query: str, num_results: int) -> list[dict]:
         """Call Modal API for recommendations."""
@@ -69,13 +69,11 @@ def create_demo(
 
     def recommend_local(query: str, num_results: int) -> list[dict]:
         """Generate recommendations locally."""
-        from src.llm.finetune import generate_semantic_id
-
-        model, tokenizer = load_local_model()
-        if model is None:
+        gen = load_local_generator()
+        if gen is None:
             return []
 
-        semantic_id = generate_semantic_id(model, tokenizer, query)
+        semantic_id = gen.generate(query)
         item_id = semantic_to_item.get(semantic_id)
 
         if not item_id:

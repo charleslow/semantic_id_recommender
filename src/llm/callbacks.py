@@ -8,7 +8,7 @@ import torch
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase, TrainerCallback
 
-from .data import DEFAULT_SYSTEM_PROMPT
+from .data import DEFAULT_SYSTEM_PROMPT, REC_TOKEN
 
 
 def _parse_semantic_id_tokens(semantic_id: str) -> list[str]:
@@ -235,9 +235,10 @@ class RecommendationTestCallback(TrainerCallback):
         self, model, query: str, device
     ) -> list[tuple[str, float]]:
         """Generate semantic IDs using beam search."""
+        # Append [REC] token to signal semantic ID generation, matching training format
         prompt_messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": query},
+            {"role": "user", "content": f"{query}{REC_TOKEN}"},
         ]
         prompt = self.tokenizer.apply_chat_template(
             prompt_messages,

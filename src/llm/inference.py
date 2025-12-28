@@ -6,7 +6,7 @@ import re
 
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
-from .data import DEFAULT_SYSTEM_PROMPT
+from .data import DEFAULT_SYSTEM_PROMPT, REC_TOKEN
 
 
 def load_finetuned_model(
@@ -84,10 +84,14 @@ class SemanticIDGenerator:
         return generated_text.strip()
 
     def _build_prompt(self, query: str) -> str:
-        """Build prompt using the tokenizer's chat template."""
+        """Build prompt using the tokenizer's chat template.
+
+        Appends the [REC] token to the query to signal semantic ID generation,
+        matching the training data format.
+        """
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": query},
+            {"role": "user", "content": f"{query}{REC_TOKEN}"},
         ]
         return self.tokenizer.apply_chat_template(
             messages,
@@ -183,63 +187,3 @@ class SemanticIDGenerator:
     def __call__(self, query: str, **kwargs) -> str:
         """Shorthand for generate()."""
         return self.generate(query, **kwargs)
-
-
-def generate_semantic_id(
-    model: PreTrainedModel,
-    tokenizer: PreTrainedTokenizerBase,
-    query: str,
-    max_new_tokens: int = 32,
-    temperature: float = 0.1,
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-) -> str:
-    """
-    Generate semantic ID for a query (simple version without constrained decoding).
-
-    For constrained decoding, use SemanticIDGenerator instead.
-
-    Args:
-        model: Fine-tuned model
-        tokenizer: Tokenizer
-        query: User query
-        max_new_tokens: Maximum tokens to generate
-        temperature: Sampling temperature
-        system_prompt: System prompt for generation
-
-    Returns:
-        Generated semantic ID string
-    """
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": query},
-    ]
-    prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        do_sample=temperature > 0,
-        pad_token_id=tokenizer.pad_token_id,
-    )
-
-    # Decode and extract semantic ID
-    generated = tokenizer.decode(outputs[0], skip_special_tokens=False)
-
-    # Clean up EOS token if present
-    if tokenizer.eos_token:
-        generated = generated.replace(tokenizer.eos_token, "").strip()
-
-    # Extract full semantic ID including [SEM_START] and [SEM_END]
-    pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
-    match = re.search(pattern, generated)
-    if match:
-        return match.group(0)
-
-    return generated.strip()
