@@ -118,6 +118,9 @@ This file handles the preparation of training data for the LLM finetune to learn
     - `type`: e.g. `predict_semantic_id`
     - `item_id`
 
+### src/llm/finetune.py
+
+`finetune_model`: the main method for finetuning. 
 
 
 
