@@ -5,6 +5,7 @@ Trainer callbacks for LLM fine-tuning evaluation.
 import re
 
 import torch
+import wandb
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase, TrainerCallback
 
@@ -158,7 +159,7 @@ class SemanticIDEvalCallback(TrainerCallback):
 
         return predictions, targets
 
-    def on_evaluate(self, args, state, control, model=None, **kwargs):
+    def on_evaluate(self, args, state, control, model=None, metrics=None, **kwargs):
         """Run semantic ID evaluation after each evaluation step."""
         if model is None:
             return
@@ -166,14 +167,30 @@ class SemanticIDEvalCallback(TrainerCallback):
         print("\n--- Semantic ID Prefix Accuracy Evaluation ---")
         predictions, targets = self._generate_predictions(model)
 
-        metrics = _compute_prefix_accuracy(
+        prefix_metrics = _compute_prefix_accuracy(
             predictions, targets, self.num_quantizers
         )
 
-        for key, value in metrics.items():
+        # Add exact match accuracy
+        exact_matches = sum(p == t for p, t in zip(predictions, targets))
+        prefix_metrics["exact_match_accuracy"] = (
+            exact_matches / len(predictions) if predictions else 0.0
+        )
+
+        for key, value in prefix_metrics.items():
             print(f"  {key}: {value:.4f}")
 
         print("----------------------------------------------\n")
+
+        # Log metrics to wandb
+        # Prefix with "eval_semantic_id/" for clarity in dashboards
+        logged_metrics = {
+            f"eval_semantic_id/{k}": v for k, v in prefix_metrics.items()
+        }
+        logged_metrics["eval_semantic_id/num_samples"] = len(predictions)
+
+        if wandb.run is not None:
+            wandb.log(logged_metrics, step=state.global_step)
 
 
 class RecommendationTestCallback(TrainerCallback):
@@ -242,6 +259,10 @@ class RecommendationTestCallback(TrainerCallback):
         model.eval()
         generator = self._get_generator(model)
 
+        # Track metrics for logging
+        num_valid = 0
+        num_in_catalogue = 0
+
         for query in self.test_queries:
             print(f"\nQuery: {query}")
 
@@ -264,6 +285,7 @@ class RecommendationTestCallback(TrainerCallback):
                     print(f"  Top result (invalid): {results[0][0]}")
                 continue
 
+            num_valid += 1
             sem_id, score = valid_result
             print(f"  Semantic ID: {sem_id} (score: {score:.4f})")
 
@@ -273,9 +295,21 @@ class RecommendationTestCallback(TrainerCallback):
                 print("  Item not found in catalogue")
                 continue
 
+            num_in_catalogue += 1
             print("  Item metadata:")
             for key, value in item.items():
                 if key != "semantic_id":
                     print(f"    {key}: {self._truncate(value)}")
 
         print("\n" + "-" * 46 + "\n")
+
+        # Log metrics to wandb
+        num_queries = len(self.test_queries)
+        rec_metrics = {
+            "eval_recommendation/valid_id_rate": num_valid / num_queries if num_queries else 0.0,
+            "eval_recommendation/catalogue_hit_rate": num_in_catalogue / num_queries if num_queries else 0.0,
+            "eval_recommendation/num_queries": num_queries,
+        }
+
+        if wandb.run is not None:
+            wandb.log(rec_metrics, step=state.global_step)
