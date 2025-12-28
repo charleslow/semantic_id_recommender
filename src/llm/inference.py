@@ -9,6 +9,28 @@ from transformers import PreTrainedModel, PreTrainedTokenizerBase
 from .data import DEFAULT_SYSTEM_PROMPT, REC_TOKEN
 
 
+def extract_semantic_id(generated_text: str, eos_token: str | None = None) -> str:
+    """
+    Extract semantic ID from generated text.
+
+    Args:
+        generated_text: Raw generated text from the model
+        eos_token: Optional EOS token to strip
+
+    Returns:
+        Extracted semantic ID string
+    """
+    if eos_token:
+        generated_text = generated_text.replace(eos_token, "").strip()
+
+    pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
+    match = re.search(pattern, generated_text)
+    if match:
+        return match.group(0)
+
+    return generated_text.strip()
+
+
 def load_finetuned_model(
     model_path: str,
     max_seq_length: int = 512,
@@ -50,6 +72,7 @@ class SemanticIDGenerator:
         num_quantizers: int = 4,
         codebook_size: int = 256,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        append_rec_token: bool = True,
     ):
         """
         Initialize the generator.
@@ -60,38 +83,23 @@ class SemanticIDGenerator:
             num_quantizers: Number of RQ-VAE quantizers
             codebook_size: Size of each codebook
             system_prompt: System prompt for generation
+            append_rec_token: Whether to append [REC] token to queries.
+                             Set to True for recommendation queries (default).
+                             Set to False if query already contains [REC] token.
         """
         self.model = model
         self.tokenizer = tokenizer
         self.num_quantizers = num_quantizers
         self.codebook_size = codebook_size
         self.system_prompt = system_prompt
-
-    def _extract_semantic_id(self, generated_text: str) -> str:
-        """Extract semantic ID from generated text."""
-        # Clean up EOS token if present
-        if self.tokenizer.eos_token:
-            generated_text = generated_text.replace(
-                self.tokenizer.eos_token, ""
-            ).strip()
-
-        # Extract full semantic ID including [SEM_START] and [SEM_END]
-        pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
-        match = re.search(pattern, generated_text)
-        if match:
-            return match.group(0)
-
-        return generated_text.strip()
+        self.append_rec_token = append_rec_token
 
     def _build_prompt(self, query: str) -> str:
-        """Build prompt using the tokenizer's chat template.
-
-        Appends the [REC] token to the query to signal semantic ID generation,
-        matching the training data format.
-        """
+        """Build prompt using the tokenizer's chat template."""
+        content = f"{query}{REC_TOKEN}" if self.append_rec_token else query
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": f"{query}{REC_TOKEN}"},
+            {"role": "user", "content": content},
         ]
         return self.tokenizer.apply_chat_template(
             messages,
@@ -126,7 +134,7 @@ class SemanticIDGenerator:
         )
 
         generated = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
-        return self._extract_semantic_id(generated)
+        return extract_semantic_id(generated, self.tokenizer.eos_token)
 
     def generate_beam(
         self,
@@ -170,7 +178,7 @@ class SemanticIDGenerator:
 
         for seq, score in zip(sequences, scores):
             generated = self.tokenizer.decode(seq, skip_special_tokens=False)
-            semantic_id = self._extract_semantic_id(generated)
+            semantic_id = extract_semantic_id(generated, self.tokenizer.eos_token)
             score_val = score.item() if hasattr(score, "item") else float(score)
             results.append((semantic_id, score_val))
 

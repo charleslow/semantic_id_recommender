@@ -8,7 +8,8 @@ import torch
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase, TrainerCallback
 
-from .data import DEFAULT_SYSTEM_PROMPT, REC_TOKEN
+from .data import DEFAULT_SYSTEM_PROMPT
+from .inference import SemanticIDGenerator, extract_semantic_id
 
 
 def _parse_semantic_id_tokens(semantic_id: str) -> list[str]:
@@ -61,18 +62,6 @@ def _compute_prefix_accuracy(
         f"prefix_{k}_accuracy": prefix_correct[k] / total
         for k in range(1, num_quantizers + 1)
     }
-
-
-def _extract_semantic_id(generated_text: str, eos_token: str | None = None) -> str:
-    """Extract semantic ID from generated text."""
-    if eos_token:
-        generated_text = generated_text.replace(eos_token, "").strip()
-
-    pattern = r"\[SEM_START\](?:\[SEM_\d+_\d+\])+\[SEM_END\]"
-    match = re.search(pattern, generated_text)
-    if match:
-        return match.group(0)
-    return generated_text.strip()
 
 
 def _is_valid_semantic_id(semantic_id: str, num_quantizers: int) -> bool:
@@ -164,7 +153,7 @@ class SemanticIDEvalCallback(TrainerCallback):
                 )
 
             generated = self.tokenizer.decode(outputs[0], skip_special_tokens=False)
-            pred = _extract_semantic_id(generated, self.tokenizer.eos_token)
+            pred = extract_semantic_id(generated, self.tokenizer.eos_token)
             predictions.append(pred)
 
         return predictions, targets
@@ -223,6 +212,7 @@ class RecommendationTestCallback(TrainerCallback):
         self.num_beams = num_beams
         self.system_prompt = system_prompt
         self.truncate_length = truncate_length
+        self._generator = None
 
     def _truncate(self, value: str) -> str:
         """Truncate a string to the configured length."""
@@ -231,58 +221,17 @@ class RecommendationTestCallback(TrainerCallback):
             return value[: self.truncate_length - 3] + "..."
         return value
 
-    def _generate_beam_search(
-        self, model, query: str, device
-    ) -> list[tuple[str, float]]:
-        """Generate semantic IDs using beam search."""
-        # Append [REC] token to signal semantic ID generation, matching training format
-        prompt_messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": f"{query}{REC_TOKEN}"},
-        ]
-        prompt = self.tokenizer.apply_chat_template(
-            prompt_messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(device)
-
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=self.num_quantizers + 3,  # SEM_START + tokens + SEM_END
-                num_beams=self.num_beams,
-                num_return_sequences=self.num_beams,
-                do_sample=False,
-                pad_token_id=self.tokenizer.pad_token_id,
-                output_scores=True,
-                return_dict_in_generate=True,
+    def _get_generator(self, model) -> SemanticIDGenerator:
+        """Get or create a SemanticIDGenerator for the model."""
+        if self._generator is None or self._generator.model is not model:
+            self._generator = SemanticIDGenerator(
+                model=model,
+                tokenizer=self.tokenizer,
+                num_quantizers=self.num_quantizers,
+                system_prompt=self.system_prompt,
+                append_rec_token=True,
             )
-
-        results = []
-        sequences = outputs.sequences
-        scores = (
-            outputs.sequences_scores
-            if hasattr(outputs, "sequences_scores")
-            else [0.0] * len(sequences)
-        )
-
-        for seq, score in zip(sequences, scores):
-            generated = self.tokenizer.decode(seq, skip_special_tokens=False)
-            semantic_id = _extract_semantic_id(generated, self.tokenizer.eos_token)
-            score_val = score.item() if hasattr(score, "item") else float(score)
-            results.append((semantic_id, score_val))
-
-        # Sort by score (highest first) and deduplicate
-        seen = set()
-        unique_results = []
-        for sem_id, score in sorted(results, key=lambda x: x[1], reverse=True):
-            if sem_id not in seen:
-                seen.add(sem_id)
-                unique_results.append((sem_id, score))
-
-        return unique_results
+        return self._generator
 
     def on_evaluate(self, args, state, control, model=None, **kwargs):
         """Run recommendation tests after each evaluation step."""
@@ -291,12 +240,16 @@ class RecommendationTestCallback(TrainerCallback):
 
         print("\n--- Recommendation Test Examples ---")
         model.eval()
-        device = next(model.parameters()).device
+        generator = self._get_generator(model)
 
         for query in self.test_queries:
             print(f"\nQuery: {query}")
 
-            results = self._generate_beam_search(model, query, device)
+            results = generator.generate_beam(
+                query,
+                num_beams=self.num_beams,
+                num_return_sequences=self.num_beams,
+            )
 
             # Find first valid semantic ID
             valid_result = None
