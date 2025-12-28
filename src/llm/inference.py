@@ -6,6 +6,8 @@ import re
 
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
 
+from .data import DEFAULT_SYSTEM_PROMPT
+
 
 def load_finetuned_model(
     model_path: str,
@@ -47,6 +49,7 @@ class SemanticIDGenerator:
         tokenizer: PreTrainedTokenizerBase,
         num_quantizers: int = 4,
         codebook_size: int = 256,
+        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     ):
         """
         Initialize the generator.
@@ -56,18 +59,13 @@ class SemanticIDGenerator:
             tokenizer: Tokenizer with semantic ID tokens
             num_quantizers: Number of RQ-VAE quantizers
             codebook_size: Size of each codebook
+            system_prompt: System prompt for generation
         """
         self.model = model
         self.tokenizer = tokenizer
         self.num_quantizers = num_quantizers
         self.codebook_size = codebook_size
-
-        self.system_prompt = (
-            "You are a recommendation system. You can:\n"
-            "1. Given item attributes, output the semantic ID\n"
-            "2. Given a semantic ID, output item attributes\n"
-            "Respond only with the requested information."
-        )
+        self.system_prompt = system_prompt
 
     def _extract_semantic_id(self, generated_text: str) -> str:
         """Extract semantic ID from generated text."""
@@ -193,6 +191,7 @@ def generate_semantic_id(
     query: str,
     max_new_tokens: int = 32,
     temperature: float = 0.1,
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
 ) -> str:
     """
     Generate semantic ID for a query (simple version without constrained decoding).
@@ -205,17 +204,11 @@ def generate_semantic_id(
         query: User query
         max_new_tokens: Maximum tokens to generate
         temperature: Sampling temperature
+        system_prompt: System prompt for generation
 
     Returns:
         Generated semantic ID string
     """
-    system_prompt = (
-        "You are a recommendation system. You can:\n"
-        "1. Given item attributes, output the semantic ID\n"
-        "2. Given a semantic ID, output item attributes\n"
-        "Respond only with the requested information."
-    )
-
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": query},

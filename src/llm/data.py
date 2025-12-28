@@ -15,6 +15,14 @@ REC_TOKEN = "[REC]"
 SEM_START_TOKEN = "[SEM_START]"
 SEM_END_TOKEN = "[SEM_END]"
 
+# Default system prompt used across all LLM components
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a recommendation system. You can:\n"
+    "1. Given item attributes, output the semantic ID\n"
+    "2. Given a semantic ID, output item attributes\n"
+    "Respond only with the requested information."
+)
+
 
 def load_catalogue_with_semantic_ids(
     catalogue_path: str | Path,
@@ -218,12 +226,7 @@ def format_as_messages(
         Dataset with 'messages' field containing role/content dicts
     """
     if system_prompt is None:
-        system_prompt = (
-            "You are a recommendation system. You can:\n"
-            "1. Given item attributes, output the semantic ID\n"
-            "2. Given a semantic ID, output item attributes\n"
-            "Respond only with the requested information."
-        )
+        system_prompt = DEFAULT_SYSTEM_PROMPT
 
     def add_messages(example):
         return {
