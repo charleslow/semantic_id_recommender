@@ -2,7 +2,7 @@
 PyTorch Lightning trainer for RQ-VAE model.
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import lightning as L
@@ -251,32 +251,20 @@ class WandbArtifactCallback(Callback):
         # Save the model checkpoint
         checkpoint = {
             "model_state_dict": model.state_dict(),
-            "config": {
-                "embedding_dim": config.embedding_dim,
-                "hidden_dim": config.hidden_dim,
-                "codebook_size": config.codebook_size,
-                "num_quantizers": config.num_quantizers,
-                "threshold_ema_dead_code": config.threshold_ema_dead_code,
-            },
+            "config": asdict(config),
         }
         torch.save(checkpoint, model_save_path)
 
-        # Build artifact metadata
-        metadata = {
-            "embedding_dim": config.embedding_dim,
-            "hidden_dim": config.hidden_dim,
-            "codebook_size": config.codebook_size,
-            "num_quantizers": config.num_quantizers,
-            "learning_rate": self.train_config.learning_rate,
-            "max_epochs": self.train_config.max_epochs,
-            "batch_size": self.train_config.batch_size,
-        }
+        # Build artifact metadata from train_config
+        metadata = asdict(self.train_config)
         if self.embedding_model:
             metadata["embedding_model"] = self.embedding_model
         metadata.update(self.extra_metadata)
 
         # Create and log artifact
-        print(f"\nLogging RQ-VAE model as W&B artifact: {self.train_config.artifact_name}")
+        print(
+            f"\nLogging RQ-VAE model as W&B artifact: {self.train_config.artifact_name}"
+        )
         artifact = wandb.Artifact(
             name=self.train_config.artifact_name,
             type="model",
