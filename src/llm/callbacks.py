@@ -27,13 +27,13 @@ def _parse_semantic_id_tokens(semantic_id: str) -> list[str]:
     return re.findall(pattern, semantic_id)
 
 
-def _compute_prefix_accuracy(
+def _compute_prefix_accuracy_target(
     predictions: list[str],
     targets: list[str],
     num_quantizers: int,
 ) -> dict[str, float]:
     """
-    Compute accuracy at each prefix level.
+    Compute accuracy at each prefix level by matching against target.
 
     Args:
         predictions: List of predicted semantic ID strings
@@ -61,6 +61,53 @@ def _compute_prefix_accuracy(
 
     return {
         f"prefix_{k}_accuracy": prefix_correct[k] / total
+        for k in range(1, num_quantizers + 1)
+    }
+
+
+def _compute_prefix_accuracy_any(
+    predictions: list[str],
+    num_quantizers: int,
+) -> dict[str, float]:
+    """
+    Compute accuracy at each prefix level by checking if tokens are valid.
+
+    A token is valid if it matches the pattern [SEM_X_Y] where X is the
+    quantizer level (0 to num_quantizers-1) and Y is any codebook index.
+
+    Args:
+        predictions: List of predicted semantic ID strings
+        num_quantizers: Number of quantizer levels
+
+    Returns:
+        Dict mapping "prefix_k_accuracy" to accuracy value for k=1..num_quantizers
+    """
+    prefix_valid = {k: 0 for k in range(1, num_quantizers + 1)}
+    total = len(predictions)
+
+    if total == 0:
+        return {f"prefix_{k}_accuracy": 0.0 for k in range(1, num_quantizers + 1)}
+
+    for pred in predictions:
+        pred_tokens = _parse_semantic_id_tokens(pred)
+
+        for k in range(1, num_quantizers + 1):
+            # Check if we have at least k tokens and all k tokens are valid
+            if len(pred_tokens) >= k:
+                # Check each token has the correct quantizer level
+                all_valid = True
+                for i in range(k):
+                    token = pred_tokens[i]
+                    # Extract quantizer level from token like [SEM_0_5]
+                    match = re.match(r"\[SEM_(\d+)_\d+\]", token)
+                    if not match or int(match.group(1)) != i:
+                        all_valid = False
+                        break
+                if all_valid:
+                    prefix_valid[k] += 1
+
+    return {
+        f"prefix_{k}_accuracy": prefix_valid[k] / total
         for k in range(1, num_quantizers + 1)
     }
 
@@ -167,26 +214,36 @@ class SemanticIDEvalCallback(TrainerCallback):
         print("\n--- Semantic ID Prefix Accuracy Evaluation ---")
         predictions, targets = self._generate_predictions(model)
 
-        prefix_metrics = _compute_prefix_accuracy(
+        # Compute both types of prefix accuracy
+        target_metrics = _compute_prefix_accuracy_target(
             predictions, targets, self.num_quantizers
         )
+        any_metrics = _compute_prefix_accuracy_any(predictions, self.num_quantizers)
 
         # Add exact match accuracy
         exact_matches = sum(p == t for p, t in zip(predictions, targets))
-        prefix_metrics["exact_match_accuracy"] = (
-            exact_matches / len(predictions) if predictions else 0.0
-        )
+        exact_match_accuracy = exact_matches / len(predictions) if predictions else 0.0
 
-        for key, value in prefix_metrics.items():
-            print(f"  {key}: {value:.4f}")
+        print("  Target prefix accuracy (must match target):")
+        for key, value in target_metrics.items():
+            print(f"    {key}: {value:.4f}")
+        print(f"    exact_match_accuracy: {exact_match_accuracy:.4f}")
+
+        print("  Any prefix accuracy (any valid token):")
+        for key, value in any_metrics.items():
+            print(f"    {key}: {value:.4f}")
 
         print("----------------------------------------------\n")
 
         # Log metrics to wandb
-        # Prefix with "eval_semantic_id/" for clarity in dashboards
-        logged_metrics = {
-            f"eval_semantic_id/{k}": v for k, v in prefix_metrics.items()
-        }
+        logged_metrics = {}
+        for k, v in target_metrics.items():
+            logged_metrics[f"eval_semantic_id_target/{k}"] = v
+        logged_metrics["eval_semantic_id_target/exact_match_accuracy"] = exact_match_accuracy
+
+        for k, v in any_metrics.items():
+            logged_metrics[f"eval_semantic_id_any/{k}"] = v
+
         logged_metrics["eval_semantic_id/num_samples"] = len(predictions)
 
         if wandb.run is not None:

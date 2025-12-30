@@ -121,6 +121,30 @@ This file handles the preparation of training data for the LLM finetune to learn
 ### src/llm/finetune.py
 
 `finetune_model`: the main method for finetuning. 
+- Allows `stage=1 or 2`:
+    - `stage=1` freezes all parameters except for input and output embeddings. This follows Eugene Yan's way to warm up the new tokens to avoid destroying parameters in our model.
+        - We also `add_semantic_tokens` to add the new tokens like `[SEM_START], [SEM_END], [REC]` and all the semantic tokens
+    - `stage=2` unfreezes all parameters. Uses LoRA for training.
+        - We start the model from the `stage=1` checkpoint
+- Setup stuff:
+    - `SFTConfig` from our parameters
+    - formatting function to `apply_chat_template`
+    - Callbacks
+- Run the `SFTTrainer`
+
+### src/llm/callbacks.py
+
+Define callbacks used during the LLM finetuning phase to track our progress.
+
+`SemanticIDEvalCallback`: Checks whether the model is able to generate semantic IDs given a query.
+- Only takes rows from val dataset where type is `predict_semantic_id`
+- Runs `model.generate` on the query
+- Computes the accuracy metrics:
+    - `eval_semantic_id_any`: Checks whether the token generated at each prefix level is any valid semantic id token.
+    - `eval_semantic_id_target`: Checks whether the token generated actually matches the desired semantic ID token (stricter condition).
+
+
+
 
 
 

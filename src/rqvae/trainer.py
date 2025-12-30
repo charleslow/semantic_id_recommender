@@ -2,11 +2,46 @@
 PyTorch Lightning trainer for RQ-VAE model.
 """
 
+from dataclasses import dataclass
+from pathlib import Path
+
 import lightning as L
 import torch
+from lightning.pytorch.callbacks import Callback
 from torch.utils.data import DataLoader
 
 from .model import SemanticRQVAE, SemanticRQVAEConfig
+
+
+@dataclass
+class RqvaeTrainConfig(SemanticRQVAEConfig):
+    """Configuration for RQ-VAE training. Extends SemanticRQVAEConfig with training params."""
+
+    # Training hyperparameters
+    learning_rate: float = 1e-3
+    max_epochs: int = 500
+    batch_size: int = 512
+    train_split: float = 0.95
+
+    # W&B artifact logging
+    log_wandb_artifacts: bool = False
+    artifact_name: str = "rqvae-model"
+
+    # Output paths
+    model_save_path: str = "models/rqvae_model.pt"
+    semantic_ids_path: str = "data/semantic_ids.json"
+
+    def to_model_config(self) -> SemanticRQVAEConfig:
+        """Convert to SemanticRQVAEConfig for model instantiation."""
+        return SemanticRQVAEConfig(
+            embedding_dim=self.embedding_dim,
+            hidden_dim=self.hidden_dim,
+            codebook_size=self.codebook_size,
+            num_quantizers=self.num_quantizers,
+            commitment_weight=self.commitment_weight,
+            decay=self.decay,
+            threshold_ema_dead_code=self.threshold_ema_dead_code,
+        )
 
 
 class RQVAETrainer(L.LightningModule):
@@ -165,3 +200,91 @@ class RQVAETrainer(L.LightningModule):
 
         with open(output_path, "w") as f:
             json.dump(output, f, indent=2)
+
+
+class WandbArtifactCallback(Callback):
+    """
+    Lightning callback to log RQ-VAE model as W&B artifact at the end of training.
+    """
+
+    def __init__(
+        self,
+        train_config: RqvaeTrainConfig,
+        embedding_model: str | None = None,
+        extra_metadata: dict | None = None,
+    ):
+        """
+        Initialize the callback.
+
+        Args:
+            train_config: Training configuration
+            embedding_model: Name of the embedding model used
+            extra_metadata: Additional metadata to include in the artifact
+        """
+        self.train_config = train_config
+        self.embedding_model = embedding_model
+        self.extra_metadata = extra_metadata or {}
+
+    def on_train_end(self, trainer: L.Trainer, pl_module: RQVAETrainer) -> None:
+        """Log model as W&B artifact after training completes."""
+        if not self.train_config.log_wandb_artifacts:
+            return
+
+        try:
+            import wandb
+        except ImportError:
+            print("wandb not installed, skipping artifact logging")
+            return
+
+        if wandb.run is None:
+            print("No active wandb run, skipping artifact logging")
+            return
+
+        model = pl_module.model
+        config = pl_module.config
+        model_save_path = Path(self.train_config.model_save_path)
+        semantic_ids_path = Path(self.train_config.semantic_ids_path)
+
+        # Ensure parent directories exist
+        model_save_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save the model checkpoint
+        checkpoint = {
+            "model_state_dict": model.state_dict(),
+            "config": {
+                "embedding_dim": config.embedding_dim,
+                "hidden_dim": config.hidden_dim,
+                "codebook_size": config.codebook_size,
+                "num_quantizers": config.num_quantizers,
+                "threshold_ema_dead_code": config.threshold_ema_dead_code,
+            },
+        }
+        torch.save(checkpoint, model_save_path)
+
+        # Build artifact metadata
+        metadata = {
+            "embedding_dim": config.embedding_dim,
+            "hidden_dim": config.hidden_dim,
+            "codebook_size": config.codebook_size,
+            "num_quantizers": config.num_quantizers,
+            "learning_rate": self.train_config.learning_rate,
+            "max_epochs": self.train_config.max_epochs,
+            "batch_size": self.train_config.batch_size,
+        }
+        if self.embedding_model:
+            metadata["embedding_model"] = self.embedding_model
+        metadata.update(self.extra_metadata)
+
+        # Create and log artifact
+        print(f"\nLogging RQ-VAE model as W&B artifact: {self.train_config.artifact_name}")
+        artifact = wandb.Artifact(
+            name=self.train_config.artifact_name,
+            type="model",
+            description="RQ-VAE model for semantic ID generation",
+            metadata=metadata,
+        )
+        artifact.add_file(str(model_save_path))
+        if semantic_ids_path.exists():
+            artifact.add_file(str(semantic_ids_path))
+        wandb.log_artifact(artifact, aliases=["latest", "best"])
+        print(f"  Artifact logged: {self.train_config.artifact_name}")

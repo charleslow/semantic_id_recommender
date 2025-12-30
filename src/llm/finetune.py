@@ -70,6 +70,10 @@ class FinetuneConfig:
     report_to: str = "wandb"
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
 
+    # W&B artifact logging
+    log_wandb_artifacts: bool = False
+    wandb_artifact_name: str | None = None  # Auto-generated if None
+
     # Recommendation test callback settings
     recommendation_test_queries: list[str] = field(default_factory=list)
     semantic_id_to_item: dict[str, dict] | None = None
@@ -94,6 +98,33 @@ def add_semantic_tokens(
     special_tokens = get_semantic_id_tokens(num_quantizers, codebook_size)
     tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
     return tokenizer
+
+
+def freeze_backbone(model) -> None:
+    """
+    Freeze all model parameters except input/output embeddings.
+
+    Used in stage 1 training to only train the new semantic ID token embeddings
+    while keeping the pretrained weights frozen.
+
+    Args:
+        model: The language model to freeze
+    """
+    # Freeze all parameters first
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Unfreeze embedding layers using model's built-in methods
+    embedding_layer = model.get_input_embeddings()
+    output_layer = model.get_output_embeddings()
+
+    if embedding_layer is not None:
+        for param in embedding_layer.parameters():
+            param.requires_grad = True
+
+    if output_layer is not None:
+        for param in output_layer.parameters():
+            param.requires_grad = True
 
 
 def create_formatting_func(
@@ -179,21 +210,7 @@ def finetune_model(
 
     # Stage 1: Freeze all parameters except input/output embeddings
     if config.stage == 1:
-        # Freeze all parameters first
-        for param in model.parameters():
-            param.requires_grad = False
-
-        # Unfreeze embedding layers using model's built-in methods
-        embedding_layer = model.get_input_embeddings()
-        output_layer = model.get_output_embeddings()
-
-        if embedding_layer is not None:
-            for param in embedding_layer.parameters():
-                param.requires_grad = True
-
-        if output_layer is not None:
-            for param in output_layer.parameters():
-                param.requires_grad = True
+        freeze_backbone(model)
 
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
 
@@ -282,4 +299,54 @@ def finetune_model(
     model.save_pretrained(config.output_dir)
     tokenizer.save_pretrained(config.output_dir)
 
+    # Log model as W&B artifact
+    if config.log_wandb_artifacts and config.report_to == "wandb":
+        _log_wandb_artifact(config, train_dataset, val_dataset)
+
     return model, tokenizer
+
+
+def _log_wandb_artifact(
+    config: FinetuneConfig,
+    train_dataset: Dataset,
+    val_dataset: Dataset | None,
+) -> None:
+    """Log the trained model as a W&B artifact."""
+    try:
+        import wandb
+
+        if wandb.run is None:
+            return
+
+        # Generate artifact name if not provided
+        artifact_name = config.wandb_artifact_name
+        if artifact_name is None:
+            artifact_name = f"llm-stage{config.stage}"
+
+        artifact = wandb.Artifact(
+            name=artifact_name,
+            type="model",
+            description=f"LLM Stage {config.stage}: "
+            + ("Embedding training" if config.stage == 1 else "LoRA fine-tuning"),
+            metadata={
+                "base_model": config.base_model,
+                "stage": config.stage,
+                "epochs": config.num_train_epochs,
+                "learning_rate": config.learning_rate,
+                "num_quantizers": config.num_quantizers,
+                "codebook_size": config.codebook_size,
+                "lora_r": config.lora_r if config.stage == 2 else None,
+                "lora_alpha": config.lora_alpha if config.stage == 2 else None,
+                "train_examples": len(train_dataset),
+                "val_examples": len(val_dataset) if val_dataset else 0,
+            },
+        )
+        artifact.add_dir(config.output_dir)
+
+        aliases = ["latest"]
+        if config.stage == 2:
+            aliases.append("best")
+
+        wandb.log_artifact(artifact, aliases=aliases)
+    except ImportError:
+        pass
