@@ -124,6 +124,10 @@ class ItemEmbeddingDataset(Dataset):
         # Move to CPU for storage
         embeddings = embeddings.cpu()
 
+        # Free embedding model memory
+        del model
+        torch.cuda.empty_cache()
+
         # Cache embeddings
         if cache_path:
             print(f"Caching embeddings to {cache_path}")

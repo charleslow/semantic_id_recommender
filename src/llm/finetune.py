@@ -245,8 +245,8 @@ def finetune_model(
         save_strategy=config.save_strategy,
         save_steps=config.save_steps,
         save_total_limit=config.save_total_limit,
-        # Evaluation
-        eval_strategy="steps" if val_dataset else "no",
+        # Evaluation (must match save_strategy when load_best_model_at_end is True)
+        eval_strategy=config.save_strategy if val_dataset else "no",
         eval_steps=config.eval_steps if val_dataset else None,
         metric_for_best_model="eval_loss" if val_dataset else None,
         greater_is_better=False if val_dataset else None,
@@ -778,6 +778,11 @@ def train(config: LLMTrainConfig) -> LLMTrainResult:
             output_path=config.semantic_ids_output_path,
             embedding_batch_size=config.embedding_batch_size,
         )
+
+        # Free RQ-VAE model memory before LLM training
+        del rqvae_model
+        torch.cuda.empty_cache()
+        print("Freed RQ-VAE model memory")
 
         # === 4. Prepare Training Data ===
         print("\n=== Preparing Training Data ===")
