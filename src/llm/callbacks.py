@@ -307,6 +307,7 @@ class RecommendationTestCallback(TrainerCallback):
                 tokenizer=self.tokenizer,
                 num_quantizers=self.num_quantizers,
                 system_prompt=self.system_prompt,
+                # Append [REC] because these are plain queries
                 append_rec_token=True,
             )
         return self._generator

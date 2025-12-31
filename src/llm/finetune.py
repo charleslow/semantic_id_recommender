@@ -69,6 +69,7 @@ class FinetuneConfig:
     # Misc
     seed: int = 42
     num_proc: int = 4
+    dataloader_num_workers: int = 16
     report_to: str = "wandb"
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
 
@@ -272,6 +273,8 @@ def finetune_model(
         # Sequence length
         max_seq_length=config.max_seq_length,
         packing=False,
+        # DataLoader
+        dataloader_num_workers=config.dataloader_num_workers,
     )
 
     # Create formatting function with tokenizer's chat template
@@ -465,6 +468,7 @@ class LLMTrainConfig:
     # === Misc ===
     seed: int = 42
     num_proc: int = 4
+    dataloader_num_workers: int = 16
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
 
     def to_finetune_config(self) -> FinetuneConfig:
@@ -499,6 +503,7 @@ class LLMTrainConfig:
             stage=self.stage,
             seed=self.seed,
             num_proc=self.num_proc,
+            dataloader_num_workers=self.dataloader_num_workers,
             report_to=self.report_to,
             system_prompt=self.system_prompt,
             log_wandb_artifacts=self.log_wandb_artifacts,
