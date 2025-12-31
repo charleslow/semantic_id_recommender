@@ -365,9 +365,12 @@ class RecommendationTestCallback(TrainerCallback):
         print("\n" + "-" * 46 + "\n")
 
         # Log results table to wandb
-        if wandb.run is not None:
+        if wandb.run is not None and wandb_table_data:
             table = wandb.Table(
                 columns=["query", "rank", "semantic_id", "score", "status", "title"],
                 data=wandb_table_data,
             )
-            wandb.log({"recommendation_results": table}, step=state.global_step)
+            wandb.log(
+                {f"recommendation_results/step_{state.global_step}": table},
+                step=state.global_step,
+            )
