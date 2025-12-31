@@ -36,5 +36,6 @@ config.yaml
 # Misc
 *.log
 .env
+.env.local
 .envrc
 .DS_Store
