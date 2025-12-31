@@ -1,0 +1,40 @@
+# Data files - exclude all data
+data/
+
+# Checkpoints and model weights
+checkpoints/
+*.pt
+*.safetensors
+
+# Virtual environment (will be recreated)
+.venv/
+
+# Git
+.git/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/
+
+# Local config
+config.yaml
+
+# Misc
+*.log
+.env
+.envrc
+.DS_Store

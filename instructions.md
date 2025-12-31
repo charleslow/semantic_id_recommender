@@ -272,10 +272,77 @@ watch -n 1 nvidia-smi
   - A100 40GB: ~$1.50/hr × 3 hours = ~$4.50
   - Storage: 50GB × $0.10/GB/month if you stop (not terminate)
 
-- **Save money**: 
+- **Save money**:
   - Use **Community Cloud** for cheaper rates (less reliable)
   - Use **Secure Cloud** for guaranteed availability
   - Terminate pod immediately after training completes
+
+---
+
+## Using a Pre-built Docker Image (Recommended)
+
+To avoid running `uv sync` every time you start a pod, build and push a Docker image with dependencies pre-installed.
+
+### Step 1: Create a Docker Hub Account
+
+1. Sign up at https://hub.docker.com/signup (free tier is fine)
+2. Note your username (e.g., `yourusername`)
+
+### Step 2: Build and Push the Image
+
+From your local machine (or any machine with Docker):
+
+```bash
+# Clone the repo if you haven't
+git clone https://github.com/charleslow/semantic_id_recommender
+cd semantic_id_recommender
+
+# Login to Docker Hub
+docker login
+
+# Build the image (replace 'yourusername' with your Docker Hub username)
+docker build -t yourusername/semantic-id-recommender:latest .
+
+# Push to Docker Hub
+docker push yourusername/semantic-id-recommender:latest
+```
+
+
+### Step 3: Launch RunPod with Your Image
+
+1. Go to **Pods** → **Deploy**
+2. Under **Container Image**, enter: `yourusername/semantic-id-recommender:latest`
+   - Or `ghcr.io/yourusername/semantic-id-recommender:latest` if using GitHub
+3. Set disk space (at least 50GB) and select GPU
+4. Add environment variables (`HF_TOKEN`, `WANDB_API_KEY`) as described above
+5. Click **Deploy**
+
+### Step 4: Connect and Transfer Data
+
+When you connect to the pod, the virtual environment is automatically activated:
+
+```bash
+# Connect via SSH
+ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519
+
+# You're ready to go! Just transfer your data:
+# (from your local machine)
+scp -P ${POD_PORT} -i ~/.ssh/id_ed25519 \
+  data/* \
+  root@${POD_IP}:/workspace/semantic_id_recommender/data/
+
+# Then run training directly - no uv sync needed!
+python -m scripts.train_rqvae --catalogue data/catalogue.jsonl
+```
+
+### What's Excluded from the Image
+
+The Docker image excludes (via `.dockerignore`):
+- `data/` - Your data files (transfer separately)
+- `checkpoints/` - Model weights
+- `.venv/` - Recreated during build
+- `notebooks/` - Jupyter notebooks
+- `config.yaml` - Local configuration
 
 ---
 
