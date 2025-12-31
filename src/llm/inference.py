@@ -165,6 +165,7 @@ class SemanticIDGenerator:
             pad_token_id=self.tokenizer.pad_token_id,
             output_scores=True,
             return_dict_in_generate=True,
+            use_cache=False,  # Disable KV cache for beam search compatibility
         )
 
         results = []
