@@ -1,5 +1,5 @@
 from .model import SemanticRQVAE, SemanticRQVAEConfig
-from .trainer import RQVAETrainer, RqvaeTrainConfig, WandbArtifactCallback
+from .trainer import RQVAETrainer, RqvaeTrainConfig, WandbArtifactCallback, train, TrainResult
 from .dataset import ItemEmbeddingDataset
 from .hub import (
     save_model_for_hub,
@@ -14,6 +14,8 @@ __all__ = [
     "RQVAETrainer",
     "RqvaeTrainConfig",
     "WandbArtifactCallback",
+    "train",
+    "TrainResult",
     "ItemEmbeddingDataset",
     "save_model_for_hub",
     "upload_to_hub",
