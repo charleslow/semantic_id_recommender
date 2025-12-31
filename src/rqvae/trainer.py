@@ -23,6 +23,7 @@ class RqvaeTrainConfig(SemanticRQVAEConfig):
     catalogue_fields: list[str] | None = None
     catalogue_id_field: str = "id"
     embedding_model: str = "TaylorAI/gte-tiny"
+    embedding_batch_size: int = 32  # Batch size for embedding generation
 
     # Training hyperparameters
     learning_rate: float = 1e-3
@@ -341,7 +342,7 @@ def train(config: RqvaeTrainConfig) -> TrainResult:
             fields=config.catalogue_fields,
             id_field=config.catalogue_id_field,
             cache_path=config.embeddings_cache_path,
-            batch_size=32,
+            batch_size=config.embedding_batch_size,
         )
         embeddings = dataset.embeddings
 

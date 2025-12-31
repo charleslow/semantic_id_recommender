@@ -387,6 +387,7 @@ class LLMTrainConfig:
     catalogue_id_field: str = "id"  # Field name for item IDs
     embedding_model: str = "TaylorAI/gte-tiny"  # For generating embeddings
     embeddings_cache_path: str | None = None  # Cache path for embeddings
+    embedding_batch_size: int = 32  # Batch size for embedding generation
 
     # Query templates for training data generation
     query_templates: dict[str, list[str]] | None = None
@@ -775,6 +776,7 @@ def train(config: LLMTrainConfig) -> LLMTrainResult:
             id_field=config.catalogue_id_field,
             embeddings_cache_path=config.embeddings_cache_path,
             output_path=config.semantic_ids_output_path,
+            embedding_batch_size=config.embedding_batch_size,
         )
 
         # === 4. Prepare Training Data ===

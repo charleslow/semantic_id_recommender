@@ -12,6 +12,7 @@ catalogue_path: "data/mcf_articles.jsonl"
 catalogue_id_field: "item_id"
 embedding_model: "Qwen/Qwen3-Embedding-0.6B"
 embeddings_cache_path: "data/embeddings_mcf.pt"
+embedding_batch_size: 16
 
 # Query templates for training data generation
 query_templates:

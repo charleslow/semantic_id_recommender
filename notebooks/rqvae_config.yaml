@@ -11,6 +11,7 @@ catalogue_fields:
   - "content"
 catalogue_id_field: "item_id"
 embedding_model: "Qwen/Qwen3-Embedding-0.6B"  # 1024-dim embeddings
+embedding_batch_size: 32  # Batch size for embedding generation
 
 # Model architecture
 embedding_dim: 1024       # Match embedding model output
