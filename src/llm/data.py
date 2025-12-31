@@ -18,7 +18,7 @@ SEM_END_TOKEN = "[SEM_END]"
 # Default system prompt used across all LLM components
 DEFAULT_SYSTEM_PROMPT = (
     "You are a recommendation system. You can:\n"
-    "1. Given item attributes, output the semantic ID\n"
+    "1. Given item attributes or a search query, output the semantic ID\n"
     "2. Given a semantic ID, output item attributes\n"
     "Respond only with the requested information."
 )

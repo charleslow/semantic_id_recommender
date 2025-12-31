@@ -1,0 +1,35 @@
+# RQ-VAE Training Configuration
+# Train a Residual Quantized VAE to learn semantic IDs for catalogue items
+
+# Data configuration
+catalogue_path: "data/mcf_articles.jsonl"
+embeddings_cache_path: "data/embeddings_mcf.pt"
+catalogue_fields:
+  - "title"
+  - "slug"
+  - "introduction"
+  - "content"
+catalogue_id_field: "item_id"
+embedding_model: "Qwen/Qwen3-Embedding-0.6B"  # 1024-dim embeddings
+
+# Model architecture
+embedding_dim: 1024       # Match embedding model output
+hidden_dim: 256           # Encoder/decoder hidden dimension
+codebook_size: 64         # Number of codes per quantizer
+num_quantizers: 3         # Number of quantization levels
+
+# Training hyperparameters
+learning_rate: 1.0e-3
+max_epochs: 500
+batch_size: 512
+train_split: 0.9
+num_workers: 16
+
+# W&B configuration
+wandb_project: "semantic-id-recommender"
+wandb_run_name: null  # Auto-generates as "rqvae_{codebook_size}x{num_quantizers}"
+log_wandb_artifacts: true
+artifact_name: "rqvae-model"
+
+# Output paths
+model_save_path: "models/rqvae_model.pt"

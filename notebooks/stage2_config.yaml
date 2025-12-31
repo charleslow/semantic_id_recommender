@@ -1,0 +1,78 @@
+# Stage 2: LoRA Fine-tuning Configuration
+# Fine-tune the full model using stage 1 checkpoint
+
+# RQ-VAE Model Source (same as stage 1)
+wandb_rqvae_artifact: "rqvae-model:latest"
+
+# Catalogue and Embeddings (must match RQ-VAE training)
+catalogue_path: "data/mcf_articles.jsonl"
+catalogue_id_field: "item_id"
+embedding_model: "Qwen/Qwen3-Embedding-0.6B"
+embeddings_cache_path: "data/embeddings_mcf.pt"
+
+# Query templates for training data generation
+query_templates:
+  predict_semantic_id:
+    - "{title}"
+    - "Find: {title}"
+    - "Search for {title}"
+    - "Recommend: {title}"
+    - "Show me {title}"
+    - "I want to read about {title}"
+    - "Article about {title}"
+  predict_attribute:
+    - "What is the {field_name} for {semantic_id}?"
+    - "Get {field_name} for {semantic_id}"
+    - "{semantic_id} - what is the {field_name}?"
+
+field_mapping:
+  title: "title"
+  category: "category"
+
+num_examples_per_item: 5
+predict_semantic_id_ratio: 0.8
+val_split: 0.1
+
+# Base LLM
+base_model: "HuggingFaceTB/SmolLM2-135M-Instruct"
+max_seq_length: 512
+load_in_4bit: true
+
+# Stage 2: LoRA fine-tuning
+stage: 2
+stage1_checkpoint: "checkpoints/llm_stage1"
+# Or load from W&B artifact:
+# wandb_stage1_artifact: "llm-stage1:latest"
+
+# LoRA settings
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+# Training hyperparameters
+learning_rate: 2.0e-4
+batch_size: 4
+gradient_accumulation_steps: 4
+num_train_epochs: 3
+warmup_ratio: 0.03
+
+# Output
+output_dir: "checkpoints/llm_stage2"
+semantic_ids_output_path: "data/semantic_ids.json"
+
+# Logging
+logging_steps: 10
+save_strategy: "epoch"
+eval_steps: 100
+
+# W&B configuration
+wandb_project: "semantic-id-recommender"
+wandb_run_name: "llm-stage2"
+report_to: "wandb"
+log_wandb_artifacts: true
+
+# Test queries for evaluation callback
+recommendation_test_queries:
+  - "News about stock market and business"
+  - "Sports football game results"
+  - "Technology and science discoveries"

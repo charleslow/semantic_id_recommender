@@ -590,6 +590,7 @@ def create_semantic_id_mapping(
     id_field: str = "id",
     embeddings_cache_path: str | None = None,
     output_path: str | None = None,
+    embedding_batch_size: int = 32,
 ) -> dict:
     """
     Create semantic ID mapping for all items in a catalogue.
@@ -601,6 +602,7 @@ def create_semantic_id_mapping(
         id_field: Field name for item IDs in catalogue
         embeddings_cache_path: Optional path to cache embeddings
         output_path: Optional path to save the mapping JSON
+        embedding_batch_size: Batch size for embedding generation
 
     Returns:
         Dictionary with:
@@ -616,7 +618,7 @@ def create_semantic_id_mapping(
         embedding_model=embedding_model,
         id_field=id_field,
         cache_path=embeddings_cache_path,
-        batch_size=32,
+        batch_size=embedding_batch_size,
     )
 
     # Generate semantic IDs
