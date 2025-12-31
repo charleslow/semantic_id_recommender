@@ -136,8 +136,23 @@ def create_formatting_func(
 
     def formatting_prompts_func(examples):
         """Format examples for training using the tokenizer's chat template."""
+        messages_list = examples["messages"]
+
+        # Handle both single example and batched examples
+        # Single: {"messages": [{"role": ..., "content": ...}, ...]}
+        # Batched: {"messages": [[{"role": ..., "content": ...}, ...], ...]}
+        if messages_list and isinstance(messages_list[0], dict):
+            # Single example - messages_list is the list of message dicts
+            text = tokenizer.apply_chat_template(
+                messages_list,
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            return [text]
+
+        # Batched examples
         output_texts = []
-        for messages in examples["messages"]:
+        for messages in messages_list:
             text = tokenizer.apply_chat_template(
                 messages,
                 tokenize=False,
