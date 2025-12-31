@@ -18,12 +18,13 @@ embedding_batch_size: 16
 query_templates:
   predict_semantic_id:
     - "{title}"
-    - "Find: {title}"
-    - "Search for {title}"
-    - "Recommend: {title}"
-    - "Show me {title}"
+    - "{title} {content}"
+    - "What is the semantic ID for {title}?"
+    - "What is the semantic ID for {title} {content}?"
+    - "Search for {title} {introduction}"
+    - "Recommend: {title} {introduction}"
     - "I want to read about {title}"
-    - "Article about {title}"
+    - "Article about {title} {content}"
   predict_attribute:
     - "What is the {field_name} for {semantic_id}?"
     - "Get {field_name} for {semantic_id}"
@@ -31,7 +32,8 @@ query_templates:
 
 field_mapping:
   title: "title"
-  category: "category"
+  content: "content"
+  introduction: "introduction"
 
 num_examples_per_item: 5
 predict_semantic_id_ratio: 0.8
@@ -41,7 +43,7 @@ val_split: 0.1
 # Options: "unsloth/Qwen3-4B", "unsloth/Qwen3-1.7B", "HuggingFaceTB/SmolLM2-1.7B-Instruct"
 base_model: "HuggingFaceTB/SmolLM2-135M-Instruct"
 max_seq_length: 512
-load_in_4bit: true
+load_in_4bit: false
 
 # Stage 1: Embedding training (backbone frozen)
 stage: 1
@@ -50,7 +52,7 @@ stage: 1
 learning_rate: 2.0e-4
 batch_size: 4
 gradient_accumulation_steps: 4
-num_train_epochs: 3
+num_train_epochs: 5
 warmup_ratio: 0.03
 
 # Output
@@ -71,6 +73,8 @@ log_wandb_artifacts: true
 
 # Test queries for evaluation callback
 recommendation_test_queries:
-  - "News about stock market and business"
-  - "Sports football game results"
-  - "Technology and science discoveries"
+  - "Article for first time job seekers"
+  - "Interview tips"
+  - "How to find a software engineer job"
+  - "Resume writing advice"
+  - "Career development strategies"
