@@ -224,20 +224,19 @@ class WandbArtifactCallback(Callback):
         self.train_config = train_config
         self.embedding_model = embedding_model
         self.extra_metadata = extra_metadata or {}
+        self._artifact_logged = False
 
-    def on_train_end(self, trainer: L.Trainer, pl_module: RQVAETrainer) -> None:
+    def on_fit_end(self, trainer: L.Trainer, pl_module: RQVAETrainer) -> None:
         """Log model as W&B artifact after training completes."""
-        if not self.train_config.log_wandb_artifacts:
+        if self._artifact_logged or not self.train_config.log_wandb_artifacts:
             return
 
         try:
             import wandb
         except ImportError:
-            print("wandb not installed, skipping artifact logging")
             return
 
         if wandb.run is None:
-            print("No active wandb run, skipping artifact logging")
             return
 
         model = pl_module.model
@@ -262,9 +261,6 @@ class WandbArtifactCallback(Callback):
         metadata.update(self.extra_metadata)
 
         # Create and log artifact
-        print(
-            f"\nLogging RQ-VAE model as W&B artifact: {self.train_config.artifact_name}"
-        )
         artifact = wandb.Artifact(
             name=self.train_config.artifact_name,
             type="model",
@@ -275,4 +271,4 @@ class WandbArtifactCallback(Callback):
         if semantic_ids_path.exists():
             artifact.add_file(str(semantic_ids_path))
         wandb.log_artifact(artifact, aliases=["latest", "best"])
-        print(f"  Artifact logged: {self.train_config.artifact_name}")
+        self._artifact_logged = True
