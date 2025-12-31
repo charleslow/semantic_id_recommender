@@ -3,7 +3,8 @@
     "allow": [
       "Bash(source .venv/bin/activate)",
       "Bash(python -m pytest:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

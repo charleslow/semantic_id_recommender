@@ -4,7 +4,9 @@ LLM fine-tuning script using Unsloth.
 Fine-tunes a base model to generate semantic IDs from user queries.
 """
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Literal
 
 import torch
@@ -350,3 +352,527 @@ def _log_wandb_artifact(
         wandb.log_artifact(artifact, aliases=aliases)
     except ImportError:
         pass
+
+
+@dataclass
+class LLMTrainConfig:
+    """
+    Comprehensive configuration for end-to-end LLM training.
+
+    This config captures all parameters needed to run the full training pipeline:
+    - Loading RQ-VAE model from wandb artifacts
+    - Creating semantic ID mappings
+    - Preparing training data
+    - Training stage 1 (embedding) and/or stage 2 (LoRA)
+    - Logging artifacts to wandb
+
+    Example:
+        >>> config = LLMTrainConfig(
+        ...     wandb_rqvae_artifact="rqvae-model:latest",
+        ...     catalogue_path="data/catalogue.jsonl",
+        ...     stage=1,
+        ... )
+        >>> result = train(config)
+    """
+
+    # === RQ-VAE Model Source ===
+    # Option 1: Load from wandb artifact
+    wandb_rqvae_artifact: str | None = None  # e.g., "rqvae-model:v3" or "rqvae-model:latest"
+    wandb_rqvae_project: str | None = None  # e.g., "my-project" (defaults to wandb_project)
+    # Option 2: Load from local path
+    rqvae_model_path: str | None = None  # e.g., "models/rqvae_model.pt"
+
+    # === Catalogue and Data ===
+    catalogue_path: str = "data/catalogue.jsonl"
+    catalogue_id_field: str = "id"  # Field name for item IDs
+    embedding_model: str = "TaylorAI/gte-tiny"  # For generating embeddings
+    embeddings_cache_path: str | None = None  # Cache path for embeddings
+
+    # Query templates for training data generation
+    query_templates: dict[str, list[str]] | None = None
+    field_mapping: dict[str, str] | None = None  # Map template placeholders to catalogue fields
+    num_examples_per_item: int = 5
+    predict_semantic_id_ratio: float = 0.8  # Ratio of semantic ID prediction vs attribute prediction
+    val_split: float = 0.1
+
+    # === Base LLM ===
+    base_model: str = "HuggingFaceTB/SmolLM2-135M-Instruct"
+    max_seq_length: int = 512
+    load_in_4bit: bool = True
+
+    # === Stage Training ===
+    stage: Literal[1, 2] = 1
+    # For stage 2: path to stage 1 checkpoint (local path or wandb artifact)
+    stage1_checkpoint: str | None = None
+    # For stage 2 from wandb: artifact name (e.g., "llm-stage1:latest")
+    wandb_stage1_artifact: str | None = None
+
+    # === LoRA Settings (Stage 2 only) ===
+    lora_r: int = 16
+    lora_alpha: int = 32
+    lora_dropout: float = 0.05
+
+    # === Training Hyperparameters ===
+    learning_rate: float = 2e-4
+    batch_size: int = 4
+    gradient_accumulation_steps: int = 4
+    num_train_epochs: int = 3
+    max_steps: int = -1
+    warmup_ratio: float = 0.03
+    warmup_steps: int = 0
+    weight_decay: float = 0.01
+    optim: str = "adamw_8bit"
+    lr_scheduler_type: str = "linear"
+    gradient_checkpointing: bool = True
+
+    # === Output ===
+    output_dir: str = "checkpoints/llm"
+    semantic_ids_output_path: str = "data/semantic_ids.json"
+
+    # === Logging and Saving ===
+    logging_steps: int = 10
+    save_strategy: str = "epoch"
+    save_steps: int = 500
+    save_total_limit: int = 2
+    eval_steps: int = 500
+
+    # === W&B Configuration ===
+    wandb_project: str | None = "semantic-id-recommender"
+    wandb_run_name: str | None = None
+    report_to: str = "wandb"
+    log_wandb_artifacts: bool = False
+    wandb_artifact_name: str | None = None
+
+    # === Evaluation ===
+    recommendation_test_queries: list[str] = field(default_factory=list)
+
+    # === Misc ===
+    seed: int = 42
+    num_proc: int = 4
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT
+
+    def to_finetune_config(self) -> FinetuneConfig:
+        """Convert to FinetuneConfig for the finetune_model function."""
+        return FinetuneConfig(
+            base_model=self.base_model,
+            stage1_checkpoint=self.stage1_checkpoint,
+            max_seq_length=self.max_seq_length,
+            load_in_4bit=self.load_in_4bit,
+            num_quantizers=0,  # Will be set from RQ-VAE config
+            codebook_size=0,  # Will be set from RQ-VAE config
+            lora_r=self.lora_r,
+            lora_alpha=self.lora_alpha,
+            lora_dropout=self.lora_dropout,
+            learning_rate=self.learning_rate,
+            batch_size=self.batch_size,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
+            num_train_epochs=self.num_train_epochs,
+            max_steps=self.max_steps,
+            warmup_ratio=self.warmup_ratio,
+            warmup_steps=self.warmup_steps,
+            weight_decay=self.weight_decay,
+            optim=self.optim,
+            lr_scheduler_type=self.lr_scheduler_type,
+            gradient_checkpointing=self.gradient_checkpointing,
+            output_dir=self.output_dir,
+            logging_steps=self.logging_steps,
+            save_strategy=self.save_strategy,
+            save_steps=self.save_steps,
+            save_total_limit=self.save_total_limit,
+            eval_steps=self.eval_steps,
+            stage=self.stage,
+            seed=self.seed,
+            num_proc=self.num_proc,
+            report_to=self.report_to,
+            system_prompt=self.system_prompt,
+            log_wandb_artifacts=self.log_wandb_artifacts,
+            wandb_artifact_name=self.wandb_artifact_name,
+            recommendation_test_queries=self.recommendation_test_queries,
+        )
+
+
+@dataclass
+class LLMTrainResult:
+    """Result of LLM training."""
+
+    model: object  # The trained model
+    tokenizer: object  # The tokenizer
+    semantic_id_mapping: dict  # Mapping from item_id to semantic_id
+    config: LLMTrainConfig
+    metrics: dict | None = None
+
+
+def load_rqvae_from_wandb(
+    artifact_name: str,
+    project: str | None = None,
+    entity: str | None = None,
+) -> tuple["SemanticRQVAE", dict]:  # noqa: F821
+    """
+    Load RQ-VAE model from a wandb artifact.
+
+    Args:
+        artifact_name: Artifact name with version (e.g., "rqvae-model:v3" or "rqvae-model:latest")
+        project: W&B project name (optional, uses current run's project if None)
+        entity: W&B entity/username (optional)
+
+    Returns:
+        Tuple of (model, config_dict)
+    """
+    import wandb
+
+    from src.rqvae.model import SemanticRQVAE, SemanticRQVAEConfig
+
+    # Build artifact path
+    if project:
+        if entity:
+            artifact_path = f"{entity}/{project}/{artifact_name}"
+        else:
+            artifact_path = f"{project}/{artifact_name}"
+    else:
+        artifact_path = artifact_name
+
+    # Download artifact
+    if wandb.run is not None:
+        artifact = wandb.run.use_artifact(artifact_path, type="model")
+    else:
+        api = wandb.Api()
+        artifact = api.artifact(artifact_path, type="model")
+
+    artifact_dir = artifact.download()
+    model_path = Path(artifact_dir) / "rqvae_model.pt"
+
+    # Load checkpoint
+    checkpoint = torch.load(model_path, map_location="cpu")
+    config_dict = checkpoint["config"]
+
+    # Create model
+    config = SemanticRQVAEConfig(**config_dict)
+    model = SemanticRQVAE(config)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    print(f"Loaded RQ-VAE from artifact: {artifact_path}")
+    print(f"  Config: {config_dict}")
+
+    return model, config_dict
+
+
+def load_rqvae_from_path(model_path: str) -> tuple["SemanticRQVAE", dict]:  # noqa: F821
+    """
+    Load RQ-VAE model from a local path.
+
+    Args:
+        model_path: Path to the model checkpoint file
+
+    Returns:
+        Tuple of (model, config_dict)
+    """
+    from src.rqvae.model import SemanticRQVAE, SemanticRQVAEConfig
+
+    checkpoint = torch.load(model_path, map_location="cpu")
+    config_dict = checkpoint["config"]
+
+    config = SemanticRQVAEConfig(**config_dict)
+    model = SemanticRQVAE(config)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    print(f"Loaded RQ-VAE from: {model_path}")
+    print(f"  Config: {config_dict}")
+
+    return model, config_dict
+
+
+def create_semantic_id_mapping(
+    rqvae_model: "SemanticRQVAE",  # noqa: F821
+    catalogue_path: str,
+    embedding_model: str,
+    id_field: str = "id",
+    embeddings_cache_path: str | None = None,
+    output_path: str | None = None,
+) -> dict:
+    """
+    Create semantic ID mapping for all items in a catalogue.
+
+    Args:
+        rqvae_model: Trained RQ-VAE model
+        catalogue_path: Path to catalogue JSONL file
+        embedding_model: Name of embedding model to use
+        id_field: Field name for item IDs in catalogue
+        embeddings_cache_path: Optional path to cache embeddings
+        output_path: Optional path to save the mapping JSON
+
+    Returns:
+        Dictionary with:
+        - item_to_semantic: Dict mapping item_id -> {codes, semantic_id}
+        - semantic_to_item: Dict mapping semantic_id -> item_id
+        - config: RQ-VAE config info
+    """
+    from src.rqvae.dataset import ItemEmbeddingDataset
+
+    # Load catalogue and generate embeddings
+    dataset = ItemEmbeddingDataset.from_catalogue(
+        catalogue_path=catalogue_path,
+        embedding_model=embedding_model,
+        id_field=id_field,
+        cache_path=embeddings_cache_path,
+        batch_size=32,
+    )
+
+    # Generate semantic IDs
+    device = next(rqvae_model.parameters()).device
+    embeddings = dataset.embeddings.to(device)
+
+    with torch.no_grad():
+        indices = rqvae_model.get_semantic_ids(embeddings)
+        semantic_strings = rqvae_model.semantic_id_to_string(indices)
+
+    # Build mapping
+    item_to_semantic = {}
+    semantic_to_item = {}
+
+    for i, item_id in enumerate(dataset.item_ids):
+        item_id_str = str(item_id)
+        sem_id = semantic_strings[i]
+        item_to_semantic[item_id_str] = {
+            "codes": indices[i].cpu().tolist(),
+            "semantic_id": sem_id,
+        }
+        semantic_to_item[sem_id] = item_id_str
+
+    mapping = {
+        "item_to_semantic": item_to_semantic,
+        "semantic_to_item": semantic_to_item,
+        "config": {
+            "num_quantizers": rqvae_model.config.num_quantizers,
+            "codebook_size": rqvae_model.config.codebook_size,
+        },
+    }
+
+    # Compute collision stats
+    unique_ids = len(semantic_to_item)
+    total_items = len(item_to_semantic)
+    collision_rate = 1 - unique_ids / total_items if total_items > 0 else 0
+
+    print(f"Created semantic ID mapping:")
+    print(f"  Total items: {total_items}")
+    print(f"  Unique IDs: {unique_ids}")
+    print(f"  Collision rate: {collision_rate * 100:.2f}%")
+
+    # Save if output path provided
+    if output_path:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(mapping, f, indent=2)
+        print(f"  Saved to: {output_path}")
+
+    return mapping
+
+
+def _get_default_query_templates() -> dict[str, list[str]]:
+    """Get default query templates for training data generation."""
+    return {
+        "predict_semantic_id": [
+            "{title}",
+            "Find: {title}",
+            "Search for {title}",
+            "Recommend: {title}",
+            "Show me {title}",
+        ],
+        "predict_attribute": [
+            "What is the {field_name} for {semantic_id}?",
+            "Get {field_name} for {semantic_id}",
+            "{semantic_id} - what is the {field_name}?",
+        ],
+    }
+
+
+def train(config: LLMTrainConfig) -> LLMTrainResult:
+    """
+    End-to-end LLM training function.
+
+    This function handles the complete training pipeline:
+    1. Initialize W&B (if configured)
+    2. Load RQ-VAE model (from wandb artifact or local path)
+    3. Create semantic ID mapping for catalogue items
+    4. Prepare training data
+    5. Train the LLM (stage 1 or stage 2)
+    6. Log artifacts to W&B (if configured)
+    7. Clean up
+
+    Args:
+        config: LLMTrainConfig with all parameters
+
+    Returns:
+        LLMTrainResult with trained model, tokenizer, and mappings
+
+    Example:
+        >>> config = LLMTrainConfig(
+        ...     wandb_rqvae_artifact="rqvae-model:latest",
+        ...     catalogue_path="data/catalogue.jsonl",
+        ...     stage=1,
+        ...     num_train_epochs=3,
+        ... )
+        >>> result = train(config)
+    """
+    from .data import (
+        format_as_messages,
+        generate_training_examples,
+        load_catalogue_with_semantic_ids,
+    )
+
+    wandb_run = None
+
+    try:
+        # === 1. Initialize W&B ===
+        if config.wandb_project and config.report_to == "wandb":
+            try:
+                import wandb
+
+                run_name = config.wandb_run_name or f"llm-stage{config.stage}"
+                wandb_run = wandb.init(
+                    project=config.wandb_project,
+                    name=run_name,
+                    config=asdict(config),
+                )
+                print(f"W&B initialized: {wandb_run.url}")
+            except ImportError:
+                print("wandb not installed, skipping W&B logging")
+            except Exception as e:
+                print(f"Failed to initialize W&B: {e}")
+
+        # === 2. Load RQ-VAE Model ===
+        print("\n=== Loading RQ-VAE Model ===")
+        if config.wandb_rqvae_artifact:
+            rqvae_project = config.wandb_rqvae_project or config.wandb_project
+            rqvae_model, rqvae_config = load_rqvae_from_wandb(
+                artifact_name=config.wandb_rqvae_artifact,
+                project=rqvae_project,
+            )
+        elif config.rqvae_model_path:
+            rqvae_model, rqvae_config = load_rqvae_from_path(config.rqvae_model_path)
+        else:
+            raise ValueError(
+                "Must specify either wandb_rqvae_artifact or rqvae_model_path"
+            )
+
+        num_quantizers = rqvae_config["num_quantizers"]
+        codebook_size = rqvae_config["codebook_size"]
+
+        # Move model to GPU if available
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        rqvae_model = rqvae_model.to(device)
+
+        # === 3. Create Semantic ID Mapping ===
+        print("\n=== Creating Semantic ID Mapping ===")
+        semantic_mapping = create_semantic_id_mapping(
+            rqvae_model=rqvae_model,
+            catalogue_path=config.catalogue_path,
+            embedding_model=config.embedding_model,
+            id_field=config.catalogue_id_field,
+            embeddings_cache_path=config.embeddings_cache_path,
+            output_path=config.semantic_ids_output_path,
+        )
+
+        # === 4. Prepare Training Data ===
+        print("\n=== Preparing Training Data ===")
+
+        # Load catalogue with semantic IDs
+        items_dataset = load_catalogue_with_semantic_ids(
+            catalogue_path=config.catalogue_path,
+            semantic_ids_path=config.semantic_ids_output_path,
+            strict=True,
+            id_field=config.catalogue_id_field,
+        )
+        print(f"Loaded {len(items_dataset)} items with semantic IDs")
+
+        # Use provided templates or defaults
+        query_templates = config.query_templates or _get_default_query_templates()
+
+        # Generate training examples
+        examples = generate_training_examples(
+            items_dataset,
+            query_templates=query_templates,
+            field_mapping=config.field_mapping,
+            num_examples_per_item=config.num_examples_per_item,
+            id_field=config.catalogue_id_field,
+            predict_semantic_id_ratio=config.predict_semantic_id_ratio,
+        )
+        print(f"Generated {len(examples)} training examples")
+
+        # Format as messages
+        formatted = format_as_messages(examples, system_prompt=config.system_prompt)
+
+        # Split into train/val
+        formatted = formatted.shuffle(seed=config.seed)
+        split = formatted.train_test_split(test_size=config.val_split, seed=config.seed)
+        train_dataset = split["train"]
+        val_dataset = split["test"]
+
+        print(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+
+        # === 5. Handle Stage 2 Checkpoint ===
+        stage1_checkpoint = config.stage1_checkpoint
+        if config.stage == 2 and config.wandb_stage1_artifact and not stage1_checkpoint:
+            # Download stage 1 artifact
+            import wandb
+
+            if wandb.run is not None:
+                artifact = wandb.run.use_artifact(
+                    config.wandb_stage1_artifact, type="model"
+                )
+            else:
+                api = wandb.Api()
+                artifact = api.artifact(config.wandb_stage1_artifact, type="model")
+            stage1_checkpoint = artifact.download()
+            print(f"Downloaded stage 1 checkpoint from: {config.wandb_stage1_artifact}")
+
+        # === 6. Build Finetune Config ===
+        finetune_config = config.to_finetune_config()
+        finetune_config.num_quantizers = num_quantizers
+        finetune_config.codebook_size = codebook_size
+        finetune_config.stage1_checkpoint = stage1_checkpoint
+
+        # Build semantic_id_to_item mapping for recommendation callback
+        if config.recommendation_test_queries:
+            # Load full catalogue items for metadata
+            import json as json_module
+
+            semantic_id_to_item = {}
+            with open(config.catalogue_path) as f:
+                for line in f:
+                    item = json_module.loads(line)
+                    item_id = str(item.get(config.catalogue_id_field, ""))
+                    if item_id in semantic_mapping["item_to_semantic"]:
+                        sem_id = semantic_mapping["item_to_semantic"][item_id][
+                            "semantic_id"
+                        ]
+                        semantic_id_to_item[sem_id] = item
+
+            finetune_config.semantic_id_to_item = semantic_id_to_item
+
+        # === 7. Train ===
+        print(f"\n=== Training Stage {config.stage} ===")
+        model, tokenizer = finetune_model(
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
+            config=finetune_config,
+        )
+
+        print("\nTraining complete!")
+
+        return LLMTrainResult(
+            model=model,
+            tokenizer=tokenizer,
+            semantic_id_mapping=semantic_mapping,
+            config=config,
+        )
+
+    finally:
+        # === 8. Clean up W&B ===
+        if wandb_run:
+            import wandb
+
+            wandb.finish()
+            print("W&B run finished")
