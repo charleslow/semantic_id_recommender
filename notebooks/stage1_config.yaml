@@ -59,7 +59,8 @@ semantic_ids_output_path: "data/semantic_ids.json"
 
 # Logging
 logging_steps: 10
-save_strategy: "epoch"
+save_strategy: "steps"
+save_steps: 100
 eval_steps: 100
 
 # W&B configuration
