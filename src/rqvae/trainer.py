@@ -29,7 +29,6 @@ class RqvaeTrainConfig(SemanticRQVAEConfig):
 
     # Output paths
     model_save_path: str = "models/rqvae_model.pt"
-    semantic_ids_path: str = "data/semantic_ids.json"
 
     def to_model_config(self) -> SemanticRQVAEConfig:
         """Convert to SemanticRQVAEConfig for model instantiation."""
@@ -154,53 +153,6 @@ class RQVAETrainer(L.LightningModule):
 
         return semantic_ids
 
-    def save_semantic_id_mapping(
-        self,
-        dataloader: DataLoader,
-        item_ids: list,
-        output_path: str,
-    ) -> None:
-        """
-        Save semantic ID mapping to JSON file.
-
-        Args:
-            dataloader: DataLoader with item embeddings
-            item_ids: List of original item IDs (same order as dataloader)
-            output_path: Path to save JSON file
-        """
-        import json
-
-        semantic_ids = self.get_semantic_ids(dataloader)
-
-        # Map original item IDs to semantic IDs
-        mapping = {}
-        for idx, item_id in enumerate(item_ids):
-            if idx in semantic_ids:
-                codes = semantic_ids[idx]
-                # Create both directions of mapping
-                semantic_str = self.model.semantic_id_to_string(torch.tensor([codes]))[
-                    0
-                ]
-                mapping[str(item_id)] = {
-                    "codes": codes,
-                    "semantic_id": semantic_str,
-                }
-
-        # Also create reverse mapping (semantic_id -> item_id)
-        reverse_mapping = {v["semantic_id"]: str(k) for k, v in mapping.items()}
-
-        output = {
-            "item_to_semantic": mapping,
-            "semantic_to_item": reverse_mapping,
-            "config": {
-                "num_quantizers": self.config.num_quantizers,
-                "codebook_size": self.config.codebook_size,
-            },
-        }
-
-        with open(output_path, "w") as f:
-            json.dump(output, f, indent=2)
-
 
 class WandbArtifactCallback(Callback):
     """
@@ -242,9 +194,8 @@ class WandbArtifactCallback(Callback):
         model = pl_module.model
         config = pl_module.config
         model_save_path = Path(self.train_config.model_save_path)
-        semantic_ids_path = Path(self.train_config.semantic_ids_path)
 
-        # Ensure parent directories exist
+        # Ensure parent directory exists
         model_save_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Save the model checkpoint
@@ -254,7 +205,7 @@ class WandbArtifactCallback(Callback):
         }
         torch.save(checkpoint, model_save_path)
 
-        # Build artifact metadata from train_config
+        # Build artifact metadata
         metadata = asdict(self.train_config)
         if self.embedding_model:
             metadata["embedding_model"] = self.embedding_model
@@ -268,7 +219,5 @@ class WandbArtifactCallback(Callback):
             metadata=metadata,
         )
         artifact.add_file(str(model_save_path))
-        if semantic_ids_path.exists():
-            artifact.add_file(str(semantic_ids_path))
         wandb.log_artifact(artifact, aliases=["latest", "best"])
         self._artifact_logged = True
