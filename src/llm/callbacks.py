@@ -114,7 +114,9 @@ def _compute_prefix_accuracy_any(
 
 def _is_valid_semantic_id(semantic_id: str, num_quantizers: int) -> bool:
     """Check if a semantic ID is valid (has correct format and token count)."""
-    if not semantic_id.startswith("[SEM_START]") or not semantic_id.endswith("[SEM_END]"):
+    if not semantic_id.startswith("[SEM_START]") or not semantic_id.endswith(
+        "[SEM_END]"
+    ):
         return False
     tokens = _parse_semantic_id_tokens(semantic_id)
     return len(tokens) == num_quantizers
@@ -239,7 +241,9 @@ class SemanticIDEvalCallback(TrainerCallback):
         logged_metrics = {}
         for k, v in target_metrics.items():
             logged_metrics[f"eval_semantic_id_target/{k}"] = v
-        logged_metrics["eval_semantic_id_target/exact_match_accuracy"] = exact_match_accuracy
+        logged_metrics["eval_semantic_id_target/exact_match_accuracy"] = (
+            exact_match_accuracy
+        )
 
         for k, v in any_metrics.items():
             logged_metrics[f"eval_semantic_id_any/{k}"] = v
@@ -316,9 +320,8 @@ class RecommendationTestCallback(TrainerCallback):
         model.eval()
         generator = self._get_generator(model)
 
-        # Track metrics for logging
-        num_valid = 0
-        num_in_catalogue = 0
+        # Collect results for wandb logging
+        wandb_table_data = []
 
         for query in self.test_queries:
             print(f"\nQuery: {query}")
@@ -329,44 +332,41 @@ class RecommendationTestCallback(TrainerCallback):
                 num_return_sequences=self.num_beams,
             )
 
-            # Find first valid semantic ID
-            valid_result = None
-            for sem_id, score in results:
-                if _is_valid_semantic_id(sem_id, self.num_quantizers):
-                    valid_result = (sem_id, score)
-                    break
+            # Display top 5 results with clear ranking (valid or not)
+            print("  Results:")
+            max_to_show = min(5, len(results))
 
-            if valid_result is None:
-                print("  No valid semantic ID generated")
-                if results:
-                    print(f"  Top result (invalid): {results[0][0]}")
-                continue
+            for rank, (sem_id, score) in enumerate(results[:max_to_show], 1):
+                is_valid = _is_valid_semantic_id(sem_id, self.num_quantizers)
+                item = self.semantic_id_to_item.get(sem_id) if is_valid else None
 
-            num_valid += 1
-            sem_id, score = valid_result
-            print(f"  Semantic ID: {sem_id} (score: {score:.4f})")
+                # Build status string
+                if not is_valid:
+                    status = "INVALID"
+                elif item:
+                    status = "IN CATALOGUE"
+                else:
+                    status = "NOT IN CATALOGUE"
 
-            # Look up item metadata
-            item = self.semantic_id_to_item.get(sem_id)
-            if item is None:
-                print("  Item not found in catalogue")
-                continue
+                print(f"  ├─ Rank {rank}: {sem_id} (score: {score:.4f}) [{status}]")
 
-            num_in_catalogue += 1
-            print("  Item metadata:")
-            for key, value in item.items():
-                if key != "semantic_id":
-                    print(f"    {key}: {self._truncate(value)}")
+                # Collect for wandb table
+                item_title = item.get("title", "") if item else ""
+                wandb_table_data.append(
+                    [query, rank, sem_id, score, status, item_title]
+                )
+
+                if item:
+                    for key, value in item.items():
+                        if key not in ("semantic_id", "id", "item_id"):
+                            print(f"  │     {key}: {self._truncate(value)}")
 
         print("\n" + "-" * 46 + "\n")
 
-        # Log metrics to wandb
-        num_queries = len(self.test_queries)
-        rec_metrics = {
-            "eval_recommendation/valid_id_rate": num_valid / num_queries if num_queries else 0.0,
-            "eval_recommendation/catalogue_hit_rate": num_in_catalogue / num_queries if num_queries else 0.0,
-            "eval_recommendation/num_queries": num_queries,
-        }
-
+        # Log results table to wandb
         if wandb.run is not None:
-            wandb.log(rec_metrics, step=state.global_step)
+            table = wandb.Table(
+                columns=["query", "rank", "semantic_id", "score", "status", "title"],
+                data=wandb_table_data,
+            )
+            wandb.log({"recommendation_results": table}, step=state.global_step)
