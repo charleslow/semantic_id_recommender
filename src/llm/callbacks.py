@@ -2,6 +2,7 @@
 Trainer callbacks for LLM fine-tuning evaluation.
 """
 
+import random
 import re
 from dataclasses import asdict
 
@@ -380,6 +381,12 @@ class RecommendationTestCallback(TrainerCallback):
                     str(status),
                     str(title),
                 ])
+
+            # Reset random state before logging to work around wandb bug
+            # https://github.com/wandb/wandb/issues/11112
+            random_state = random.getstate()
+            random.seed()
+
             table = wandb.Table(
                 columns=["step", "query", "rank", "semantic_id", "score", "status", "title"],
                 data=table_data_with_step,
@@ -389,6 +396,9 @@ class RecommendationTestCallback(TrainerCallback):
                 {f"recommendation_results/step_{state.global_step}": table},
                 step=state.global_step,
             )
+
+            # Restore random state
+            random.setstate(random_state)
 
 
 class WandbArtifactCallback(TrainerCallback):
