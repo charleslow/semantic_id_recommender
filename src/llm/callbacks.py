@@ -358,9 +358,7 @@ class RecommendationTestCallback(TrainerCallback):
                 )
 
                 if item:
-                    for key, value in item.items():
-                        if key not in ("semantic_id", "id", "item_id"):
-                            print(f"  │     {key}: {self._truncate(value)}")
+                    print(f"  │     title: {self._truncate(item_title)}")
 
         print("\n" + "-" * 46 + "\n")
 
