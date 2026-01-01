@@ -3,6 +3,7 @@ Trainer callbacks for LLM fine-tuning evaluation.
 """
 
 import re
+from dataclasses import asdict
 
 import torch
 import wandb
@@ -388,3 +389,63 @@ class RecommendationTestCallback(TrainerCallback):
                 {f"recommendation_results/step_{state.global_step}": table},
                 step=state.global_step,
             )
+
+
+class WandbArtifactCallback(TrainerCallback):
+    """
+    Trainer callback to log the trained model as a W&B artifact.
+
+    This callback logs the artifact at the end of training, ensuring
+    the W&B run is still active when the artifact is uploaded.
+    """
+
+    def __init__(
+        self,
+        config: "FinetuneConfig",  # noqa: F821
+        train_examples: int = 0,
+        val_examples: int = 0,
+    ):
+        self.config = config
+        self.artifact_name = config.wandb_artifact_name or f"llm-stage{config.stage}"
+        self.train_examples = train_examples
+        self.val_examples = val_examples
+        self._logged = False
+
+    def on_train_end(self, args, state, control, **kwargs):
+        """Log the model artifact at the end of training."""
+        if self._logged:
+            return
+
+        if wandb.run is None:
+            print("Warning: wandb.run is None, skipping artifact logging")
+            return
+
+        try:
+            config = self.config
+            print(f"\n=== Logging model artifact: {self.artifact_name} ===")
+            print(f"  Run ID: {wandb.run.id}")
+            print(f"  Output dir: {config.output_dir}")
+
+            metadata = asdict(config)
+            metadata["train_examples"] = self.train_examples
+            metadata["val_examples"] = self.val_examples
+
+            artifact = wandb.Artifact(
+                name=self.artifact_name,
+                type="model",
+                description=f"LLM Stage {config.stage}: "
+                + ("Embedding training" if config.stage == 1 else "LoRA fine-tuning"),
+                metadata=metadata,
+            )
+            artifact.add_dir(config.output_dir)
+
+            aliases = ["latest"]
+            if config.stage == 2:
+                aliases.append("best")
+
+            logged_artifact = wandb.run.log_artifact(artifact, aliases=aliases)
+            logged_artifact.wait()
+            self._logged = True
+            print(f"Artifact {self.artifact_name} logged successfully with aliases: {aliases}")
+        except Exception as e:
+            print(f"Error logging artifact: {e}")

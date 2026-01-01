@@ -14,7 +14,11 @@ from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 from trl import SFTConfig, SFTTrainer
 
-from .callbacks import RecommendationTestCallback, SemanticIDEvalCallback
+from .callbacks import (
+    RecommendationTestCallback,
+    SemanticIDEvalCallback,
+    WandbArtifactCallback,
+)
 from .data import DEFAULT_SYSTEM_PROMPT, get_semantic_id_tokens
 
 
@@ -301,6 +305,15 @@ def finetune_model(
         )
         callbacks.append(recommendation_test_callback)
 
+    # Add artifact logging callback (logs at end of training while wandb run is active)
+    if config.log_wandb_artifacts and config.report_to == "wandb":
+        artifact_callback = WandbArtifactCallback(
+            config=config,
+            train_examples=len(train_dataset),
+            val_examples=len(val_dataset) if val_dataset else 0,
+        )
+        callbacks.append(artifact_callback)
+
     # Create trainer
     trainer = SFTTrainer(
         model=model,
@@ -319,65 +332,7 @@ def finetune_model(
     model.save_pretrained(config.output_dir)
     tokenizer.save_pretrained(config.output_dir)
 
-    # Log model as W&B artifact
-    if config.log_wandb_artifacts and config.report_to == "wandb":
-        _log_wandb_artifact(config, train_dataset, val_dataset)
-
     return model, tokenizer
-
-
-def _log_wandb_artifact(
-    config: FinetuneConfig,
-    train_dataset: Dataset,
-    val_dataset: Dataset | None,
-) -> None:
-    """Log the trained model as a W&B artifact."""
-    try:
-        import wandb
-
-        if wandb.run is None:
-            print("Warning: wandb.run is None, skipping artifact logging")
-            return
-
-        # Generate artifact name if not provided
-        artifact_name = config.wandb_artifact_name
-        if artifact_name is None:
-            artifact_name = f"llm-stage{config.stage}"
-
-        print(f"Logging model artifact: {artifact_name}")
-
-        artifact = wandb.Artifact(
-            name=artifact_name,
-            type="model",
-            description=f"LLM Stage {config.stage}: "
-            + ("Embedding training" if config.stage == 1 else "LoRA fine-tuning"),
-            metadata={
-                "base_model": config.base_model,
-                "stage": config.stage,
-                "epochs": config.num_train_epochs,
-                "learning_rate": config.learning_rate,
-                "num_quantizers": config.num_quantizers,
-                "codebook_size": config.codebook_size,
-                "lora_r": config.lora_r if config.stage == 2 else None,
-                "lora_alpha": config.lora_alpha if config.stage == 2 else None,
-                "train_examples": len(train_dataset),
-                "val_examples": len(val_dataset) if val_dataset else 0,
-            },
-        )
-        artifact.add_dir(config.output_dir)
-
-        aliases = ["latest"]
-        if config.stage == 2:
-            aliases.append("best")
-
-        wandb.log_artifact(artifact, aliases=aliases)
-        # Wait for artifact upload to complete
-        artifact.wait()
-        print(f"Artifact {artifact_name} logged successfully")
-    except ImportError:
-        print("Warning: wandb not installed, skipping artifact logging")
-    except Exception as e:
-        print(f"Error logging artifact: {e}")
 
 
 @dataclass
