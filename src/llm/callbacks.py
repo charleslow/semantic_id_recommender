@@ -364,11 +364,27 @@ class RecommendationTestCallback(TrainerCallback):
 
         # Log results table to wandb
         if wandb.run is not None and wandb_table_data:
+            print(f"Logging {len(wandb_table_data)} rows to wandb table")
+            print(f"First row sample: {wandb_table_data[0]}")
+            # Add step to each row, ensuring all values are basic Python types
+            table_data_with_step = []
+            for row in wandb_table_data:
+                query, rank, sem_id, score, status, title = row
+                table_data_with_step.append([
+                    int(state.global_step),
+                    str(query),
+                    int(rank),
+                    str(sem_id),
+                    float(score),
+                    str(status),
+                    str(title),
+                ])
             table = wandb.Table(
-                columns=["query", "rank", "semantic_id", "score", "status", "title"],
-                data=wandb_table_data,
+                columns=["step", "query", "rank", "semantic_id", "score", "status", "title"],
+                data=table_data_with_step,
             )
-            wandb.log(
+            print(f"Table has {len(table.data)} rows")
+            wandb.run.log(
                 {f"recommendation_results/step_{state.global_step}": table},
                 step=state.global_step,
             )
