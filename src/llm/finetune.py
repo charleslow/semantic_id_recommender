@@ -336,12 +336,15 @@ def _log_wandb_artifact(
         import wandb
 
         if wandb.run is None:
+            print("Warning: wandb.run is None, skipping artifact logging")
             return
 
         # Generate artifact name if not provided
         artifact_name = config.wandb_artifact_name
         if artifact_name is None:
             artifact_name = f"llm-stage{config.stage}"
+
+        print(f"Logging model artifact: {artifact_name}")
 
         artifact = wandb.Artifact(
             name=artifact_name,
@@ -368,8 +371,13 @@ def _log_wandb_artifact(
             aliases.append("best")
 
         wandb.log_artifact(artifact, aliases=aliases)
+        # Wait for artifact upload to complete
+        artifact.wait()
+        print(f"Artifact {artifact_name} logged successfully")
     except ImportError:
-        pass
+        print("Warning: wandb not installed, skipping artifact logging")
+    except Exception as e:
+        print(f"Error logging artifact: {e}")
 
 
 @dataclass
