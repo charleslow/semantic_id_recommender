@@ -847,15 +847,19 @@ def train(config: LLMTrainConfig) -> LLMTrainResult:
             # Download stage 1 artifact
             import wandb
 
+            # Build full artifact path (similar to load_rqvae_from_wandb)
+            artifact_path = config.wandb_stage1_artifact
+            if config.wandb_project and "/" not in artifact_path.split(":")[0]:
+                # Add project prefix if not already fully qualified
+                artifact_path = f"{config.wandb_project}/{artifact_path}"
+
             if wandb.run is not None:
-                artifact = wandb.run.use_artifact(
-                    config.wandb_stage1_artifact, type="model"
-                )
+                artifact = wandb.run.use_artifact(artifact_path, type="model")
             else:
                 api = wandb.Api()
-                artifact = api.artifact(config.wandb_stage1_artifact, type="model")
+                artifact = api.artifact(artifact_path, type="model")
             stage1_checkpoint = artifact.download()
-            print(f"Downloaded stage 1 checkpoint from: {config.wandb_stage1_artifact}")
+            print(f"Downloaded stage 1 checkpoint from: {artifact_path}")
 
         # === 6. Build Finetune Config ===
         finetune_config = config.to_finetune_config()
