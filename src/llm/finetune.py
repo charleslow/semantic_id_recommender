@@ -4,6 +4,8 @@ LLM fine-tuning script using Unsloth.
 Fine-tunes a base model to generate semantic IDs from user queries.
 """
 
+from unsloth import FastLanguageModel  # isort: skip
+
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -173,7 +175,6 @@ def freeze_backbone(model, num_new_tokens: int = 0) -> list:
 
 def _load_model_unsloth(config: FinetuneConfig, model_to_load: str):
     """Load model using Unsloth (requires GPU)."""
-    from unsloth import FastLanguageModel
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_to_load,
@@ -367,7 +368,9 @@ def finetune_model(
         load_best_model_at_end=bool(val_dataset),
         # Misc
         seed=config.seed,
-        gradient_checkpointing=config.gradient_checkpointing if torch.cuda.is_available() else False,
+        gradient_checkpointing=config.gradient_checkpointing
+        if torch.cuda.is_available()
+        else False,
         # Sequence length
         max_length=config.max_length,
         packing=False,
