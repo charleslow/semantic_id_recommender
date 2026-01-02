@@ -39,7 +39,9 @@ val_split: 0.1
 # Base LLM
 base_model: "HuggingFaceTB/SmolLM2-135M-Instruct"
 max_length: 512
-load_in_4bit: false
+# IMPORTANT: load_in_4bit must be true for stage 2 (LoRA training) with Unsloth
+# to avoid dtype mismatch bugs in fast_lora kernel
+load_in_4bit: true
 
 # Stage 2: LoRA fine-tuning
 stage: 2

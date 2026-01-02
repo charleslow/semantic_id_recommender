@@ -259,6 +259,11 @@ class TestSFTTrainerIntegration:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires GPU")
     def test_sft_trainer_with_unsloth_multiproc(self, training_dataset):
         """Test SFTTrainer works with Unsloth and num_proc > 1."""
+        import os
+
+        # Required for newer Unsloth versions - return logits for loss calculation
+        os.environ["UNSLOTH_RETURN_LOGITS"] = "1"
+
         # Import here to control when Unsloth patches SFTTrainer
         from trl import SFTConfig, SFTTrainer
         from unsloth import FastLanguageModel
@@ -266,8 +271,28 @@ class TestSFTTrainerIntegration:
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=MODEL_NAME,
             max_seq_length=128,
-            dtype=None,
-            load_in_4bit=False,
+            dtype=None,  # Let Unsloth auto-detect
+            load_in_4bit=True,  # Use 4-bit quantization for Unsloth's optimized kernels
+        )
+
+        # Apply LoRA with gradient checkpointing - required for Unsloth to work properly
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=8,
+            lora_alpha=16,
+            lora_dropout=0.0,
+            target_modules=[
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
+            bias="none",
+            use_gradient_checkpointing="unsloth",
+            random_state=42,
         )
 
         # Pre-process dataset to apply chat template BEFORE passing to SFTTrainer
