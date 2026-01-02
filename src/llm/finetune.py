@@ -171,39 +171,74 @@ def freeze_backbone(model, num_new_tokens: int = 0) -> list:
     return hook_handles
 
 
+class FormattingFunc:
+    """
+    Picklable formatting function for SFTTrainer.
+
+    Using a class instead of a closure to avoid pickling issues with
+    multiprocessing when the tokenizer captures unpicklable config objects.
+    """
+
+    def __init__(self, tokenizer: PreTrainedTokenizerBase):
+        # Store only the chat template string, not the whole tokenizer
+        self.chat_template = tokenizer.chat_template
+        self.eos_token = tokenizer.eos_token
+        self.bos_token = tokenizer.bos_token
+
+    def __call__(self, examples):
+        """Format examples for training using the tokenizer's chat template."""
+        from jinja2 import Template
+
+        messages_list = examples["messages"]
+
+        # Handle both single example and batched examples
+        if messages_list and isinstance(messages_list[0], dict):
+            messages_list = [messages_list]
+
+        output_texts = []
+        template = Template(self.chat_template)
+        for messages in messages_list:
+            text = template.render(
+                messages=messages,
+                eos_token=self.eos_token,
+                bos_token=self.bos_token,
+                add_generation_prompt=False,
+            )
+            output_texts.append(text)
+
+        return output_texts
+
+
 def create_formatting_func(
     tokenizer: PreTrainedTokenizerBase,
 ) -> callable:
     """Create a formatting function that uses the tokenizer's chat template."""
+    return FormattingFunc(tokenizer)
 
-    def formatting_prompts_func(examples):
-        """Format examples for training using the tokenizer's chat template."""
-        messages_list = examples["messages"]
 
-        # Handle both single example and batched examples
-        # Single: {"messages": [{"role": ..., "content": ...}, ...]}
-        # Batched: {"messages": [[{"role": ..., "content": ...}, ...], ...]}
-        if messages_list and isinstance(messages_list[0], dict):
-            # Single example - messages_list is the list of message dicts
-            text = tokenizer.apply_chat_template(
-                messages_list,
-                tokenize=False,
-                add_generation_prompt=False,
-            )
-            return [text]
+def _load_model_unsloth(config: FinetuneConfig, model_to_load: str):
+    """Load model using Unsloth (requires GPU)."""
+    from unsloth import FastLanguageModel
 
-        # Batched examples
-        output_texts = []
-        for messages in messages_list:
-            text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False,
-            )
-            output_texts.append(text)
-        return output_texts
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=model_to_load,
+        max_seq_length=config.max_length,
+        dtype=None,  # Auto-detect
+        load_in_4bit=config.load_in_4bit,
+    )
+    return model, tokenizer, FastLanguageModel
 
-    return formatting_prompts_func
+
+def _load_model_transformers(config: FinetuneConfig, model_to_load: str):
+    """Load model using standard transformers (CPU fallback)."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_to_load)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_to_load,
+        torch_dtype=torch.float32,  # Use float32 for CPU
+    )
+    return model, tokenizer, None
 
 
 def finetune_model(
@@ -214,6 +249,8 @@ def finetune_model(
     """
     Fine-tune LLM using Unsloth for semantic ID generation.
 
+    Falls back to standard transformers on CPU when no GPU is available.
+
     Args:
         train_dataset: Training dataset
         val_dataset: Validation dataset (optional)
@@ -222,8 +259,6 @@ def finetune_model(
     Returns:
         Trained model and tokenizer
     """
-    from unsloth import FastLanguageModel
-
     if config is None:
         config = FinetuneConfig()
 
@@ -235,13 +270,20 @@ def finetune_model(
     else:
         model_to_load = config.base_model
 
-    # Load model with Unsloth
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=model_to_load,
-        max_seq_length=config.max_length,
-        dtype=None,  # Auto-detect
-        load_in_4bit=config.load_in_4bit,
-    )
+    # Try to use Unsloth (GPU), fall back to transformers (CPU)
+    use_unsloth = torch.cuda.is_available()
+    if use_unsloth:
+        try:
+            model, tokenizer, FastLanguageModel = _load_model_unsloth(
+                config, model_to_load
+            )
+        except Exception as e:
+            print(f"Failed to load with Unsloth: {e}, falling back to transformers")
+            use_unsloth = False
+
+    if not use_unsloth:
+        print("Using standard transformers (CPU mode)")
+        model, tokenizer, _ = _load_model_transformers(config, model_to_load)
 
     # Add semantic ID tokens (only for stage 1 or no stage)
     # For stage 2, tokens should already be in the tokenizer from stage 1 checkpoint
@@ -254,26 +296,47 @@ def finetune_model(
     # Add LoRA adapters (only for stage 2 or no stage)
     # Stage 1 trains embeddings directly without LoRA
     if config.stage != 1:
-        model = FastLanguageModel.get_peft_model(
-            model,
-            r=config.lora_r,
-            lora_alpha=config.lora_alpha,
-            lora_dropout=config.lora_dropout,
-            target_modules=[
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-            ],
-            bias="none",
-            use_gradient_checkpointing="unsloth"
-            if config.gradient_checkpointing
-            else False,
-            random_state=config.seed,
-        )
+        if use_unsloth:
+            model = FastLanguageModel.get_peft_model(
+                model,
+                r=config.lora_r,
+                lora_alpha=config.lora_alpha,
+                lora_dropout=config.lora_dropout,
+                target_modules=[
+                    "q_proj",
+                    "k_proj",
+                    "v_proj",
+                    "o_proj",
+                    "gate_proj",
+                    "up_proj",
+                    "down_proj",
+                ],
+                bias="none",
+                use_gradient_checkpointing="unsloth"
+                if config.gradient_checkpointing
+                else False,
+                random_state=config.seed,
+            )
+        else:
+            # Use standard PEFT for CPU
+            from peft import LoraConfig, get_peft_model
+
+            lora_config = LoraConfig(
+                r=config.lora_r,
+                lora_alpha=config.lora_alpha,
+                lora_dropout=config.lora_dropout,
+                target_modules=[
+                    "q_proj",
+                    "k_proj",
+                    "v_proj",
+                    "o_proj",
+                    "gate_proj",
+                    "up_proj",
+                    "down_proj",
+                ],
+                bias="none",
+            )
+            model = get_peft_model(model, lora_config)
 
     # Stage 1: Freeze all parameters except new token embeddings
     if config.stage == 1:
@@ -282,7 +345,16 @@ def finetune_model(
         num_new_tokens = 3 + config.num_quantizers * config.codebook_size
         freeze_backbone(model, num_new_tokens=num_new_tokens)
 
-    use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+    # Determine precision and optimizer based on GPU availability
+    if torch.cuda.is_available():
+        use_bf16 = torch.cuda.is_bf16_supported()
+        use_fp16 = not use_bf16
+        optim = config.optim  # Use configured optimizer (e.g., adamw_8bit)
+    else:
+        # CPU mode: no mixed precision, use standard optimizer
+        use_bf16 = False
+        use_fp16 = False
+        optim = "adamw_torch"  # Standard optimizer for CPU
 
     # Build SFTConfig
     sft_config = SFTConfig(
@@ -298,14 +370,14 @@ def finetune_model(
         num_train_epochs=config.num_train_epochs if config.max_steps <= 0 else 1,
         # Optimizer settings
         learning_rate=config.learning_rate,
-        optim=config.optim,
+        optim=optim,
         weight_decay=config.weight_decay,
         lr_scheduler_type=config.lr_scheduler_type,
         warmup_steps=config.warmup_steps if config.warmup_steps > 0 else 0,
         warmup_ratio=config.warmup_ratio if config.warmup_steps <= 0 else 0.0,
         # Precision
         bf16=use_bf16,
-        fp16=not use_bf16,
+        fp16=use_fp16,
         # Logging
         logging_steps=config.logging_steps,
         report_to=config.report_to,
@@ -321,7 +393,7 @@ def finetune_model(
         load_best_model_at_end=bool(val_dataset),
         # Misc
         seed=config.seed,
-        gradient_checkpointing=config.gradient_checkpointing,
+        gradient_checkpointing=config.gradient_checkpointing if torch.cuda.is_available() else False,
         # Sequence length
         max_length=config.max_length,
         packing=False,
