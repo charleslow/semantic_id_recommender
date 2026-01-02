@@ -51,7 +51,7 @@ llm:
   batch_size: 4
   gradient_accumulation_steps: 4
   max_epochs: 3
-  max_seq_length: 512
+  max_length: 512
   warmup_ratio: 0.03
 
   # Special tokens for semantic IDs

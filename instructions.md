@@ -99,20 +99,21 @@ ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519 \
 
 > **Important**: Always use `tmux` for long-running training jobs. This ensures training continues even if your SSH connection drops.
 
-#### Install tmux (if not available)
+Install tmux if not available.
 
 ```bash
 apt-get update && apt-get install -y tmux
 ```
 
-#### Start a tmux session
+Now we start a new tmux session or attach to an existing one:
 
 ```bash
-# Create a new tmux session named "training"
+# Start a new session
 tmux new -s training
-
-# Inside tmux, activate the environment
 source .venv/bin/activate
+
+# Attach to an existing session
+tmux attach -t training 
 ```
 
 #### Train RQ-VAE

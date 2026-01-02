@@ -33,7 +33,7 @@ def extract_semantic_id(generated_text: str, eos_token: str | None = None) -> st
 
 def load_finetuned_model(
     model_path: str,
-    max_seq_length: int = 512,
+    max_length: int = 512,
     load_in_4bit: bool = True,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizerBase]:
     """
@@ -41,7 +41,7 @@ def load_finetuned_model(
 
     Args:
         model_path: Path to saved model or HuggingFace repo
-        max_seq_length: Maximum sequence length
+        max_length: Maximum sequence length
         load_in_4bit: Whether to load in 4-bit
 
     Returns:
@@ -51,7 +51,7 @@ def load_finetuned_model(
 
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_path,
-        max_seq_length=max_seq_length,
+        max_seq_length=max_length,
         dtype=None,
         load_in_4bit=load_in_4bit,
     )

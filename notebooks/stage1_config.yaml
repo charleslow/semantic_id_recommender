@@ -42,7 +42,7 @@ val_split: 0.1
 # Base LLM
 # Options: "unsloth/Qwen3-4B", "unsloth/Qwen3-1.7B", "HuggingFaceTB/SmolLM2-1.7B-Instruct"
 base_model: "HuggingFaceTB/SmolLM2-135M-Instruct"
-max_seq_length: 512
+max_length: 512
 load_in_4bit: false
 
 # Stage 1: Embedding training (backbone frozen)

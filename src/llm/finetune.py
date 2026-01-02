@@ -34,7 +34,7 @@ class FinetuneConfig:
     # Model settings
     base_model: str = "HuggingFaceTB/SmolLM2-135M-Instruct"
     stage1_checkpoint: str | None = None  # Path to stage 1 checkpoint for stage 2
-    max_seq_length: int = 512
+    max_length: int = 512
     load_in_4bit: bool = True
 
     # Semantic ID settings
@@ -238,7 +238,7 @@ def finetune_model(
     # Load model with Unsloth
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_to_load,
-        max_seq_length=config.max_seq_length,
+        max_seq_length=config.max_length,
         dtype=None,  # Auto-detect
         load_in_4bit=config.load_in_4bit,
     )
@@ -323,7 +323,7 @@ def finetune_model(
         seed=config.seed,
         gradient_checkpointing=config.gradient_checkpointing,
         # Sequence length
-        max_seq_length=config.max_seq_length,
+        max_length=config.max_length,
         packing=False,
         # DataLoader
         dataloader_num_workers=config.dataloader_num_workers,
@@ -435,7 +435,7 @@ class LLMTrainConfig:
 
     # === Base LLM ===
     base_model: str = "HuggingFaceTB/SmolLM2-135M-Instruct"
-    max_seq_length: int = 512
+    max_length: int = 512
     load_in_4bit: bool = True
 
     # === Stage Training ===
@@ -495,7 +495,7 @@ class LLMTrainConfig:
         return FinetuneConfig(
             base_model=self.base_model,
             stage1_checkpoint=self.stage1_checkpoint,
-            max_seq_length=self.max_seq_length,
+            max_length=self.max_length,
             load_in_4bit=self.load_in_4bit,
             num_quantizers=0,  # Will be set from RQ-VAE config
             codebook_size=0,  # Will be set from RQ-VAE config

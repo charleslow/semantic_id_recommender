@@ -112,7 +112,7 @@ def main():
         output_dir=config.output.llm_checkpoint,
         num_quantizers=config.llm.num_codebooks,
         codebook_size=config.llm.codebook_size,
-        max_seq_length=config.llm.max_seq_length,
+        max_length=config.llm.max_length,
         lora_r=config.llm.lora_r,
         lora_alpha=config.llm.lora_alpha,
         lora_dropout=config.llm.lora_dropout,
