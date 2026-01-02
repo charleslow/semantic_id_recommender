@@ -270,37 +270,37 @@ class TestSFTTrainerIntegration:
             load_in_4bit=False,
         )
 
-        # Formatting function required by Unsloth for multiprocessing
-        # Must return a list of strings, not a dict
-        def formatting_func(examples):
-            texts = []
-            for messages in examples["messages"]:
-                # Ensure messages is a proper list of dicts
-                if isinstance(messages, dict):
-                    messages = [messages]
-                text = tokenizer.apply_chat_template(
-                    list(messages), tokenize=False, add_generation_prompt=False
-                )
-                texts.append(text)
-            return texts
+        # Pre-process dataset to apply chat template BEFORE passing to SFTTrainer
+        # This avoids pickle issues with tokenizer in formatting_func closure
+        # For training: add_generation_prompt=False (assistant response already in messages)
+        def apply_chat_template(example):
+            text = tokenizer.apply_chat_template(
+                example["messages"],
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            return {"text": text}
+
+        # Apply with num_proc=1 to avoid pickle issues during preprocessing
+        training_dataset = training_dataset.map(apply_chat_template, num_proc=1)
 
         config = SFTConfig(
             output_dir="/tmp/test_sft_unsloth",
             max_steps=1,
             per_device_train_batch_size=2,
             report_to="none",
-            dataset_num_proc=4,  # Test multiprocessing with Unsloth
+            dataset_num_proc=4,  # Now safe - no formatting_func needed
             dataloader_num_workers=0,
             logging_steps=1,
             max_length=128,
             packing=False,
+            dataset_text_field="text",  # Use pre-processed text field
         )
 
         trainer = SFTTrainer(
             model=model,
             processing_class=tokenizer,
             train_dataset=training_dataset,
-            formatting_func=formatting_func,
             args=config,
         )
 

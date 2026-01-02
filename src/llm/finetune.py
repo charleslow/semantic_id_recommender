@@ -315,22 +315,21 @@ def finetune_model(
     dataset_num_proc = config.num_proc
     dataloader_num_workers = config.dataloader_num_workers
 
-    # Create formatting function for Unsloth compatibility with multiprocessing
-    # This pre-applies the chat template so the tokenizer doesn't need to be pickled
-    # Must return a list of strings, not a dict
-    def formatting_func(examples):
-        """Format messages using chat template."""
-        texts = []
-        for messages in examples["messages"]:
-            # Ensure messages is a proper list of dicts
-            # (Dataset may store nested structures differently)
-            if isinstance(messages, dict):
-                messages = [messages]
-            text = tokenizer.apply_chat_template(
-                list(messages), tokenize=False, add_generation_prompt=False
-            )
-            texts.append(text)
-        return texts
+    # Pre-process datasets to apply chat template BEFORE passing to SFTTrainer
+    # This avoids pickle issues with tokenizer in formatting_func closure
+    # For training: add_generation_prompt=False (assistant response already in messages)
+    def apply_chat_template(example):
+        text = tokenizer.apply_chat_template(
+            example["messages"],
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+        return {"text": text}
+
+    # Apply with num_proc=1 to avoid pickle issues during preprocessing
+    train_dataset = train_dataset.map(apply_chat_template, num_proc=1)
+    if val_dataset is not None:
+        val_dataset = val_dataset.map(apply_chat_template, num_proc=1)
 
     sft_config = SFTConfig(
         output_dir=config.output_dir,
@@ -371,6 +370,8 @@ def finetune_model(
         # Sequence length
         max_length=config.max_length,
         packing=False,
+        # Dataset - use pre-processed text field
+        dataset_text_field="text",
         # DataLoader
         dataloader_num_workers=dataloader_num_workers,
     )
@@ -412,7 +413,6 @@ def finetune_model(
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         args=sft_config,
-        formatting_func=formatting_func,
         callbacks=callbacks if callbacks else None,
     )
 
