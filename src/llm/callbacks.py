@@ -335,9 +335,9 @@ class RecommendationTestCallback(TrainerCallback):
                 num_return_sequences=self.num_beams,
             )
 
-            # Display top 5 results with clear ranking (valid or not)
+            # Display top 2 results with clear ranking (valid or not)
             print("  Results:")
-            max_to_show = min(5, len(results))
+            max_to_show = min(2, len(results))
 
             for rank, (sem_id, score) in enumerate(results[:max_to_show], 1):
                 is_valid = _is_valid_semantic_id(sem_id, self.num_quantizers)
@@ -372,15 +372,17 @@ class RecommendationTestCallback(TrainerCallback):
             table_data_with_step = []
             for row in wandb_table_data:
                 query, rank, sem_id, score, status, title = row
-                table_data_with_step.append([
-                    int(state.global_step),
-                    str(query),
-                    int(rank),
-                    str(sem_id),
-                    float(score),
-                    str(status),
-                    str(title),
-                ])
+                table_data_with_step.append(
+                    [
+                        int(state.global_step),
+                        str(query),
+                        int(rank),
+                        str(sem_id),
+                        float(score),
+                        str(status),
+                        str(title),
+                    ]
+                )
 
             # Reset random state before logging to work around wandb bug
             # https://github.com/wandb/wandb/issues/11112
@@ -388,7 +390,15 @@ class RecommendationTestCallback(TrainerCallback):
             random.seed()
 
             table = wandb.Table(
-                columns=["step", "query", "rank", "semantic_id", "score", "status", "title"],
+                columns=[
+                    "step",
+                    "query",
+                    "rank",
+                    "semantic_id",
+                    "score",
+                    "status",
+                    "title",
+                ],
                 data=table_data_with_step,
             )
             print(f"Table has {len(table.data)} rows")
@@ -456,6 +466,8 @@ class WandbArtifactCallback(TrainerCallback):
             logged_artifact = wandb.run.log_artifact(artifact, aliases=aliases)
             logged_artifact.wait()
             self._logged = True
-            print(f"Artifact {self.artifact_name} logged successfully with aliases: {aliases}")
+            print(
+                f"Artifact {self.artifact_name} logged successfully with aliases: {aliases}"
+            )
         except Exception as e:
             print(f"Error logging artifact: {e}")

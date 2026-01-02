@@ -366,8 +366,12 @@ class LLMTrainConfig:
 
     # === RQ-VAE Model Source ===
     # Option 1: Load from wandb artifact
-    wandb_rqvae_artifact: str | None = None  # e.g., "rqvae-model:v3" or "rqvae-model:latest"
-    wandb_rqvae_project: str | None = None  # e.g., "my-project" (defaults to wandb_project)
+    wandb_rqvae_artifact: str | None = (
+        None  # e.g., "rqvae-model:v3" or "rqvae-model:latest"
+    )
+    wandb_rqvae_project: str | None = (
+        None  # e.g., "my-project" (defaults to wandb_project)
+    )
     # Option 2: Load from local path
     rqvae_model_path: str | None = None  # e.g., "models/rqvae_model.pt"
 
@@ -380,9 +384,13 @@ class LLMTrainConfig:
 
     # Query templates for training data generation
     query_templates: dict[str, list[str]] | None = None
-    field_mapping: dict[str, str] | None = None  # Map template placeholders to catalogue fields
+    field_mapping: dict[str, str] | None = (
+        None  # Map template placeholders to catalogue fields
+    )
     num_examples_per_item: int = 5
-    predict_semantic_id_ratio: float = 0.8  # Ratio of semantic ID prediction vs attribute prediction
+    predict_semantic_id_ratio: float = (
+        0.8  # Ratio of semantic ID prediction vs attribute prediction
+    )
     val_split: float = 0.1
 
     # === Base LLM ===
@@ -648,7 +656,7 @@ def create_semantic_id_mapping(
     total_items = len(item_to_semantic)
     collision_rate = 1 - unique_ids / total_items if total_items > 0 else 0
 
-    print(f"Created semantic ID mapping:")
+    print("Created semantic ID mapping:")
     print(f"  Total items: {total_items}")
     print(f"  Unique IDs: {unique_ids}")
     print(f"  Collision rate: {collision_rate * 100:.2f}%")
