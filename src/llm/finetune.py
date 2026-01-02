@@ -5,7 +5,11 @@ Fine-tunes a base model to generate semantic IDs from user queries.
 """
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
+
+# Required for Unsloth 2024.11+ with TRL 0.20+ - enables logits for loss calculation
+os.environ["UNSLOTH_RETURN_LOGITS"] = "1"
 from pathlib import Path
 from typing import Literal
 
@@ -367,7 +371,14 @@ def finetune_model(
         load_best_model_at_end=bool(val_dataset),
         # Misc
         seed=config.seed,
-        gradient_checkpointing=config.gradient_checkpointing if torch.cuda.is_available() else False,
+        # Stage 1 doesn't use get_peft_model, so Unsloth's gradient checkpointing isn't set up.
+        # Disable gradient checkpointing for stage 1 to avoid errors and improve speed.
+        # Stage 2 uses get_peft_model which properly sets up Unsloth's gradient checkpointing.
+        gradient_checkpointing=(
+            config.gradient_checkpointing
+            if torch.cuda.is_available() and config.stage != 1
+            else False
+        ),
         # Sequence length
         max_length=config.max_length,
         packing=False,

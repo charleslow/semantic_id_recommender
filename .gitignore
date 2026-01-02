@@ -226,3 +226,9 @@ checkpoints/
 
 # Keep notebooks but ignore outputs
 notebooks/.ipynb_checkpoints/
+
+wandb/*
+unsloth_compiled_cache/*
+lightning_logs/*
+models/*
+artifacts/*
