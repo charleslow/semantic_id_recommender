@@ -171,67 +171,6 @@ def freeze_backbone(model, num_new_tokens: int = 0) -> list:
     return hook_handles
 
 
-def pretokenize_dataset(
-    dataset: Dataset,
-    tokenizer: PreTrainedTokenizerBase,
-    max_length: int,
-    num_proc: int = 4,
-) -> Dataset:
-    """
-    Pre-tokenize a dataset with chat messages.
-
-    This avoids passing the tokenizer to SFTTrainer, which can cause
-    pickle errors with Unsloth due to ConfigModuleInstance objects.
-
-    Args:
-        dataset: Dataset with 'messages' column
-        tokenizer: Tokenizer to use
-        max_length: Maximum sequence length
-        num_proc: Number of processes for parallel tokenization
-
-    Returns:
-        Dataset with 'input_ids', 'attention_mask', and 'labels' columns
-    """
-
-    def tokenize_fn(examples):
-        messages_list = examples["messages"]
-
-        # Format messages using chat template
-        texts = []
-        for messages in messages_list:
-            text = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False,
-            )
-            texts.append(text)
-
-        # Tokenize
-        tokenized = tokenizer(
-            texts,
-            truncation=True,
-            max_length=max_length,
-            padding=False,
-            return_tensors=None,
-        )
-
-        # For causal LM, labels are the same as input_ids
-        tokenized["labels"] = tokenized["input_ids"].copy()
-
-        return tokenized
-
-    # Tokenize in parallel - this happens before trainer, avoiding pickle issues
-    tokenized = dataset.map(
-        tokenize_fn,
-        batched=True,
-        num_proc=num_proc,
-        remove_columns=dataset.column_names,
-        desc="Tokenizing",
-    )
-
-    return tokenized
-
-
 def _load_model_unsloth(config: FinetuneConfig, model_to_load: str):
     """Load model using Unsloth (requires GPU)."""
     from unsloth import FastLanguageModel
@@ -372,29 +311,19 @@ def finetune_model(
         use_fp16 = False
         optim = "adamw_torch"  # Standard optimizer for CPU
 
-    # Pre-tokenize datasets to avoid passing tokenizer to SFTTrainer
-    # This prevents pickle errors with Unsloth's ConfigModuleInstance objects
-    print("Pre-tokenizing datasets...")
-    train_dataset_tokenized = pretokenize_dataset(
-        train_dataset,
-        tokenizer,
-        max_length=config.max_length,
-        num_proc=config.num_proc,
-    )
-    val_dataset_tokenized = None
-    if val_dataset is not None:
-        val_dataset_tokenized = pretokenize_dataset(
-            val_dataset,
-            tokenizer,
-            max_length=config.max_length,
-            num_proc=config.num_proc,
-        )
-
     # Build SFTConfig
+    # When using Unsloth, disable multiprocessing to avoid pickle errors with
+    # ConfigModuleInstance objects from torch.compile internals
+    if use_unsloth:
+        dataset_num_proc = 1
+        dataloader_num_workers = 0
+    else:
+        dataset_num_proc = config.num_proc
+        dataloader_num_workers = config.dataloader_num_workers
+
     sft_config = SFTConfig(
         output_dir=config.output_dir,
-        # Dataset already tokenized, no processing needed
-        dataset_num_proc=1,
+        dataset_num_proc=dataset_num_proc,
         # Batch and accumulation
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size,
@@ -431,8 +360,8 @@ def finetune_model(
         # Sequence length
         max_length=config.max_length,
         packing=False,
-        # DataLoader - can use multiprocessing since data is pre-tokenized
-        dataloader_num_workers=config.dataloader_num_workers,
+        # DataLoader
+        dataloader_num_workers=dataloader_num_workers,
     )
 
     # Create callbacks
@@ -465,11 +394,12 @@ def finetune_model(
         )
         callbacks.append(artifact_callback)
 
-    # Create trainer with pre-tokenized data (no processing_class or formatting_func needed)
+    # Create trainer
     trainer = SFTTrainer(
         model=model,
-        train_dataset=train_dataset_tokenized,
-        eval_dataset=val_dataset_tokenized,
+        processing_class=tokenizer,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
         args=sft_config,
         callbacks=callbacks if callbacks else None,
     )
