@@ -356,6 +356,16 @@ def finetune_model(
         use_fp16 = False
         optim = "adamw_torch"  # Standard optimizer for CPU
 
+    # Make tokenizer picklable for multiprocessing by saving and reloading
+    # This removes unpicklable ConfigModuleInstance objects
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tokenizer.save_pretrained(tmpdir)
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(tmpdir)
+
     # Build SFTConfig
     sft_config = SFTConfig(
         output_dir=config.output_dir,
