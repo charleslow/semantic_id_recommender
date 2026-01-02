@@ -312,14 +312,20 @@ def finetune_model(
         optim = "adamw_torch"  # Standard optimizer for CPU
 
     # Build SFTConfig
-    # When using Unsloth, disable multiprocessing to avoid pickle errors with
-    # ConfigModuleInstance objects from torch.compile internals
-    if use_unsloth:
-        dataset_num_proc = 1
-        dataloader_num_workers = 0
-    else:
-        dataset_num_proc = config.num_proc
-        dataloader_num_workers = config.dataloader_num_workers
+    dataset_num_proc = config.num_proc
+    dataloader_num_workers = config.dataloader_num_workers
+
+    # Create formatting function for Unsloth compatibility with multiprocessing
+    # This pre-applies the chat template so the tokenizer doesn't need to be pickled
+    def formatting_func(examples):
+        """Format messages using chat template."""
+        texts = []
+        for messages in examples["messages"]:
+            text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=False
+            )
+            texts.append(text)
+        return {"text": texts}
 
     sft_config = SFTConfig(
         output_dir=config.output_dir,
@@ -401,6 +407,7 @@ def finetune_model(
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         args=sft_config,
+        formatting_func=formatting_func,
         callbacks=callbacks if callbacks else None,
     )
 

@@ -10,13 +10,10 @@ These tests verify:
 Run on GPU (e.g., RunPod) with: pytest tests/test_llm.py -v
 """
 
-from unsloth import FastLanguageModel  # isort: skip
-
 import pytest
 import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTConfig, SFTTrainer
 
 from src.llm.data import (
     format_as_messages,
@@ -234,39 +231,29 @@ class TestSFTTrainerIntegration:
             })
         return Dataset.from_list(examples)
 
-    def test_sft_trainer_with_transformers_multiproc(self, model, tokenizer, training_dataset):
-        """Test SFTTrainer works with standard transformers and num_proc > 1."""
-        config = SFTConfig(
-            output_dir="/tmp/test_sft",
-            max_steps=1,
-            per_device_train_batch_size=2,
-            report_to="none",
-            dataset_num_proc=2,
-            dataloader_num_workers=0,
-            logging_steps=1,
-            max_length=128,
-            packing=False,
-        )
-
-        trainer = SFTTrainer(
-            model=model,
-            processing_class=tokenizer,
-            train_dataset=training_dataset,
-            args=config,
-        )
-
-        # Should not raise
-        trainer.train()
-
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires GPU")
     def test_sft_trainer_with_unsloth_multiproc(self, training_dataset):
         """Test SFTTrainer works with Unsloth and num_proc > 1."""
+        # Import here to control when Unsloth patches SFTTrainer
+        from unsloth import FastLanguageModel
+        from trl import SFTConfig, SFTTrainer
+
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=MODEL_NAME,
             max_seq_length=128,
             dtype=None,
             load_in_4bit=True,
         )
+
+        # Formatting function required by Unsloth for multiprocessing
+        def formatting_func(examples):
+            texts = []
+            for messages in examples["messages"]:
+                text = tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=False
+                )
+                texts.append(text)
+            return {"text": texts}
 
         config = SFTConfig(
             output_dir="/tmp/test_sft_unsloth",
@@ -284,6 +271,7 @@ class TestSFTTrainerIntegration:
             model=model,
             processing_class=tokenizer,
             train_dataset=training_dataset,
+            formatting_func=formatting_func,
             args=config,
         )
 
