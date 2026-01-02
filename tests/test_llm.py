@@ -22,7 +22,6 @@ from src.llm.data import (
 )
 from src.llm.finetune import add_semantic_tokens, freeze_backbone
 
-
 # Test config - small values for speed
 NUM_QUANTIZERS = 2
 CODEBOOK_SIZE = 16
@@ -44,11 +43,28 @@ def model():
 @pytest.fixture
 def sample_items_dataset():
     """Create sample items dataset with semantic IDs."""
-    return Dataset.from_list([
-        {"id": "1", "title": "Blue Widget", "category": "widgets", "semantic_id": "[SEM_START][SEM_0_1][SEM_1_2][SEM_END]"},
-        {"id": "2", "title": "Red Gadget", "category": "gadgets", "semantic_id": "[SEM_START][SEM_0_3][SEM_1_4][SEM_END]"},
-        {"id": "3", "title": "Green Tool", "category": "tools", "semantic_id": "[SEM_START][SEM_0_5][SEM_1_6][SEM_END]"},
-    ])
+    return Dataset.from_list(
+        [
+            {
+                "id": "1",
+                "title": "Blue Widget",
+                "category": "widgets",
+                "semantic_id": "[SEM_START][SEM_0_1][SEM_1_2][SEM_END]",
+            },
+            {
+                "id": "2",
+                "title": "Red Gadget",
+                "category": "gadgets",
+                "semantic_id": "[SEM_START][SEM_0_3][SEM_1_4][SEM_END]",
+            },
+            {
+                "id": "3",
+                "title": "Green Tool",
+                "category": "tools",
+                "semantic_id": "[SEM_START][SEM_0_5][SEM_1_6][SEM_END]",
+            },
+        ]
+    )
 
 
 @pytest.fixture
@@ -171,8 +187,12 @@ class TestFreezeBackbone:
 
         # Check gradient is zeroed for original tokens, non-zero for new
         grad = input_emb.weight.grad
-        assert grad[:original_vocab_size].abs().sum() == 0, "Original token gradients should be zero"
-        assert grad[-num_new_tokens:].abs().sum() > 0, "New token gradients should be non-zero"
+        assert grad[:original_vocab_size].abs().sum() == 0, (
+            "Original token gradients should be zero"
+        )
+        assert grad[-num_new_tokens:].abs().sum() > 0, (
+            "New token gradients should be non-zero"
+        )
 
         # Clean up hooks
         for h in hooks:
@@ -223,26 +243,31 @@ class TestSFTTrainerIntegration:
         """Create minimal training dataset."""
         examples = []
         for i in range(20):
-            examples.append({
-                "messages": [
-                    {"role": "user", "content": f"Find item {i}"},
-                    {"role": "assistant", "content": f"[SEM_START][SEM_0_{i % 16}][SEM_1_{i % 16}][SEM_END]"},
-                ]
-            })
+            examples.append(
+                {
+                    "messages": [
+                        {"role": "user", "content": f"Find item {i}"},
+                        {
+                            "role": "assistant",
+                            "content": f"[SEM_START][SEM_0_{i % 16}][SEM_1_{i % 16}][SEM_END]",
+                        },
+                    ]
+                }
+            )
         return Dataset.from_list(examples)
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires GPU")
     def test_sft_trainer_with_unsloth_multiproc(self, training_dataset):
         """Test SFTTrainer works with Unsloth and num_proc > 1."""
         # Import here to control when Unsloth patches SFTTrainer
-        from unsloth import FastLanguageModel
         from trl import SFTConfig, SFTTrainer
+        from unsloth import FastLanguageModel
 
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=MODEL_NAME,
             max_seq_length=128,
             dtype=None,
-            load_in_4bit=True,
+            load_in_4bit=False,
         )
 
         # Formatting function required by Unsloth for multiprocessing
