@@ -2,20 +2,6 @@
 
 This guide walks you through setting up and running the semantic ID recommender pipeline.
 
-## Table of Contents
-
-1. [Prerequisites](#prerequisites)
-2. [Running on RunPod](#running-on-runpod)
-3. [Local Setup](#local-setup)
-4. [Stage 1: Train RQ-VAE](#stage-1-train-rq-vae)
-5. [Stage 2: Fine-tune LLM](#stage-2-fine-tune-llm)
-6. [Stage 3: Deploy to Modal](#stage-3-deploy-to-modal)
-7. [Stage 4: Run Frontend](#stage-4-run-frontend)
-8. [Testing in Colab](#testing-in-colab)
-9. [Troubleshooting](#troubleshooting)
-
----
-
 ## Prerequisites
 
 ### Required Accounts
@@ -40,15 +26,6 @@ This guide walks you through setting up and running the semantic ID recommender 
    - Sign up at https://modal.com/signup
    - $30 free credits for new accounts
 
-### Hardware Requirements
-
-| Stage | Minimum GPU | Recommended |
-|-------|-------------|-------------|
-| RQ-VAE Training | CPU (slow) / Any GPU | RTX 3060+ |
-| LLM Fine-tuning | 16GB VRAM | 24GB VRAM (RTX 4090, A10G) |
-| Inference | A10G (Modal) | A10G |
-
----
 
 ## Running on RunPod
 
@@ -71,39 +48,11 @@ Before launching your pod, set up your API tokens as environment variables so th
 | `HF_TOKEN` | HuggingFace API token | Get from https://huggingface.co/settings/tokens (needs "Write" permission) |
 | `WANDB_API_KEY` | Weights & Biases API key (optional) | Get from https://wandb.ai/authorize |
 
-**Important**: These variables will be automatically injected into all your pods when they start.
-
-### Step 3: Launch a Pod
-
-1. Go to **Pods** → **GPU Instances**
-2. Select a GPU based on your needs:
-   - **RQ-VAE Training**: RTX 3060 or higher (~$0.20/hr)
-   - **LLM Fine-tuning**: RTX 4090, A6000, or A100 (~$0.40-$2.00/hr)
-3. Choose a template:
-   - **RunPod PyTorch** (recommended)
-   - Or **RunPod Pytorch + JupyterLab** for notebook access
-4. Set disk space: at least **50 GB** for model downloads
-5. **Advanced Options** (optional):
-   - You can also add environment variables per-pod here if you prefer
-   - Add `HF_TOKEN` and `WANDB_API_KEY` in the "Environment Variables" section
-6. Click **Deploy**
-
 ### Step 4: Connect to Your Pod
 
 Make sure to add your public SSH key to RunPod first (Settings → SSH Keys).
 
-In your pod's **Connect** menu, use **SSH over exposed TCP** (not the proxy method):
-
-```bash
-# Get the connection command from RunPod dashboard
-# It will look something like:
-ssh root@<ip-address> -p <port> -i ~/.ssh/id_ed25519
-
-# Save these for later use:
-export POD_IP="<ip-address>"
-export POD_PORT="22022"
-ssh root@"$POD_IP" -p "$POD_PORT" -i ~/.ssh/id_ed25519
-```
+In your pod's **Connect** menu, use **SSH over exposed TCP** (not the proxy method).
 
 ### Step 5: Verify Environment Variables
 

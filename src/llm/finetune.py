@@ -107,7 +107,7 @@ def add_semantic_tokens(
     return tokenizer
 
 
-def freeze_backbone(model) -> None:
+def freeze_backbone(model, num_new_tokens: int = 0) -> list:
     """
     Freeze all model parameters except input/output embeddings.
 
@@ -116,6 +116,13 @@ def freeze_backbone(model) -> None:
 
     Args:
         model: The language model to freeze
+        num_new_tokens: Number of newly added tokens. If > 0, gradient hooks will
+            be registered to zero out gradients for all tokens except the last
+            `num_new_tokens` tokens, ensuring only new token embeddings are trained.
+
+    Returns:
+        List of gradient hook handles. These should be removed after training
+        by calling handle.remove() for each handle.
     """
     # Freeze all parameters first
     for param in model.parameters():
@@ -132,6 +139,36 @@ def freeze_backbone(model) -> None:
     if output_layer is not None:
         for param in output_layer.parameters():
             param.requires_grad = True
+
+    # Register gradient hooks to zero out gradients for original tokens
+    hook_handles = []
+    if num_new_tokens > 0:
+
+        def make_gradient_mask_hook(num_new: int):
+            """Create a hook that zeros gradients for all but the last num_new tokens."""
+
+            def hook(grad):
+                # grad shape: [vocab_size, hidden_dim]
+                # Zero out gradients for original tokens (all but last num_new)
+                mask = torch.zeros_like(grad)
+                mask[-num_new:] = 1.0
+                return grad * mask
+
+            return hook
+
+        if embedding_layer is not None:
+            for param in embedding_layer.parameters():
+                handle = param.register_hook(make_gradient_mask_hook(num_new_tokens))
+                hook_handles.append(handle)
+
+        if output_layer is not None and output_layer is not embedding_layer:
+            # Only add hooks if output layer is different from input embedding
+            # (some models tie weights)
+            for param in output_layer.parameters():
+                handle = param.register_hook(make_gradient_mask_hook(num_new_tokens))
+                hook_handles.append(handle)
+
+    return hook_handles
 
 
 def create_formatting_func(
@@ -238,9 +275,12 @@ def finetune_model(
             random_state=config.seed,
         )
 
-    # Stage 1: Freeze all parameters except input/output embeddings
+    # Stage 1: Freeze all parameters except new token embeddings
     if config.stage == 1:
-        freeze_backbone(model)
+        # Calculate number of new semantic ID tokens:
+        # 3 special tokens (REC, SEM_START, SEM_END) + num_quantizers * codebook_size
+        num_new_tokens = 3 + config.num_quantizers * config.codebook_size
+        freeze_backbone(model, num_new_tokens=num_new_tokens)
 
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
 
