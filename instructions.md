@@ -156,27 +156,63 @@ ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519 \
 **Note**: Use the **SSH over exposed TCP** connection (direct IP and port) from Step 4.
 
 
-### Step 8: Run Training
+### Step 8: Run Training with tmux
+
+**Important**: Always use `tmux` for long-running training jobs. This ensures training continues even if your SSH connection drops.
+
+#### Start a tmux session
+
+```bash
+# Create a new tmux session named "training"
+tmux new -s training
+
+# Inside tmux, activate the environment
+source .venv/bin/activate
+```
 
 #### Train RQ-VAE
+
 ```bash
-# Using your data
-python -m scripts.train_rqvae --catalogue data/catalogue.jsonl
+# Using your config file
+python -m scripts.train_rqvae --config configs/rqvae_config.yaml
 
 # Or test with dummy data
-python -m scripts.train_rqvae --create-dummy --dummy-size 1000
+python -m scripts.train_rqvae --config configs/rqvae_config.yaml --create-dummy --dummy-size 1000
 ```
 
 #### Fine-tune LLM
+
 ```bash
-# Using default config
-python -m scripts.finetune_llm
+# Stage 1 only (embedding training)
+python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1
 
-# Or with custom model
-python -m scripts.finetune_llm --base-model "unsloth/Qwen3-4B"
+# Stage 2 only (LoRA fine-tuning)
+python -m scripts.train_llm --config configs/stage2_config.yaml --stage 2
 
-# Push to HuggingFace Hub when done
-python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-recommender"
+# Both stages sequentially (recommended)
+python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1,2 --stage2-config configs/stage2_config.yaml
+```
+
+#### tmux Commands Reference
+
+```bash
+# Detach from tmux (training continues in background)
+# Press: Ctrl+B, then D
+
+# Reattach to running session
+tmux attach -t training
+
+# List all sessions
+tmux ls
+
+# Kill a session when done
+tmux kill-session -t training
+
+# Create a new window in the same session
+# Press: Ctrl+B, then C
+
+# Switch between windows
+# Press: Ctrl+B, then window number (0, 1, 2...)
 ```
 
 ### Step 9: Save Models to HuggingFace Hub
@@ -213,12 +249,6 @@ upload_to_hub(
     token=os.getenv('HF_TOKEN')
 )
 "
-
-# For fine-tuned LLM - push during training
-# The HF_TOKEN environment variable will be used automatically
-python -m scripts.finetune_llm \
-  --push-to-hub \
-  --hub-repo "your-username/semantic-recommender"
 ```
 
 
@@ -236,6 +266,9 @@ If you're using the Jupyter template:
 # Training progress is shown in real-time
 # Watch GPU usage:
 watch -n 1 nvidia-smi
+
+# View training logs in tmux
+tmux attach -t training
 ```
 
 ### Step 12: Stop Your Pod
@@ -253,10 +286,10 @@ watch -n 1 nvidia-smi
   ```bash
   # Start tmux session
   tmux new -s training
-  
+
   # Run your training
-  python -m scripts.finetune_llm
-  
+  python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1,2 --stage2-config configs/stage2_config.yaml
+
   # Detach: Ctrl+B then D
   # Reattach later: tmux attach -t training
   ```
@@ -332,7 +365,7 @@ scp -P ${POD_PORT} -i ~/.ssh/id_ed25519 \
   root@${POD_IP}:/workspace/semantic_id_recommender/data/
 
 # Then run training directly - no uv sync needed!
-python -m scripts.train_rqvae --catalogue data/catalogue.jsonl
+python -m scripts.train_rqvae --config configs/rqvae_config.yaml
 ```
 
 ### What's Excluded from the Image
@@ -402,30 +435,47 @@ The RQ-VAE learns semantic IDs for each item in your catalogue.
 ### Quick Start
 
 ```bash
-# Using existing data
-python -m scripts.train_rqvae --catalogue data/mcf_articles.jsonl
+# Using your config file
+python -m scripts.train_rqvae --config configs/rqvae_config.yaml
 
 # Or create dummy data for testing
-python -m scripts.train_rqvae --create-dummy --dummy-size 1000
+python -m scripts.train_rqvae --config configs/rqvae_config.yaml --create-dummy --dummy-size 1000
 ```
 
 ### Configuration
 
-Copy the sample config and customize:
-
-```bash
-cp config.sample.yaml config.yaml
-```
-
-Edit `config.yaml` to customize:
+Create or modify your config file (e.g., `configs/rqvae_config.yaml`):
 
 ```yaml
-rqvae:
-  codebook_size: 256      # Codes per level (256^4 = 4B possible items)
-  num_quantizers: 4       # Number of levels in semantic ID
-  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-  max_epochs: 100
-  batch_size: 256
+# Data configuration
+catalogue_path: "data/catalogue.jsonl"
+embeddings_cache_path: "data/embeddings.pt"
+catalogue_fields:
+  - "title"
+  - "description"
+catalogue_id_field: "id"
+embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+
+# Model architecture
+embedding_dim: 384           # Match embedding model output
+hidden_dim: 256
+codebook_size: 256           # Codes per level (256^4 = 4B possible items)
+num_quantizers: 4            # Number of levels in semantic ID
+
+# Training hyperparameters
+learning_rate: 1.0e-3
+max_epochs: 500
+batch_size: 512
+train_split: 0.9
+
+# W&B configuration
+wandb_project: "semantic-id-recommender"
+wandb_run_name: null         # Auto-generates as "rqvae_{codebook_size}x{num_quantizers}"
+log_wandb_artifacts: true
+artifact_name: "rqvae-model"
+
+# Output paths
+model_save_path: "models/rqvae_model.pt"
 ```
 
 ### What Happens
@@ -433,25 +483,24 @@ rqvae:
 1. Loads catalogue items
 2. Generates embeddings using sentence-transformers
 3. Trains RQ-VAE to learn discrete codes
-4. Saves semantic ID mapping to `data/semantic_ids.json`
+4. Saves model and logs to W&B (if configured)
 
 ### Expected Output
 
 ```
-Loaded 10000 items from data/catalogue.jsonl
-Generating embeddings with sentence-transformers/all-MiniLM-L6-v2...
-100%|████████████████████████████████| 10000/10000
-Dataset size: 10000
-Epoch 99: 100%|████████████████████████████████|
-val/loss: 0.0234
-Saved semantic IDs to data/semantic_ids.json
-```
+Loaded config from: notebooks/rqvae_config.yaml
+Loading catalogue from data/catalogue.jsonl...
+Dataset: 10000 items, 384-dim embeddings
+Train/Val split: 9000/1000
+Model: 4 quantizers x 256 codes = 4,294,967,296 possible IDs
+Starting training...
+Training complete!
 
-### Verify Results
-
-```bash
-# Check the semantic ID mapping
-head -20 data/semantic_ids.json
+=== Evaluation Results ===
+Avg perplexity: 245.32 / 256
+Avg usage: 95.8%
+Unique IDs: 9987 / 10000
+Collision rate: 0.13%
 ```
 
 ---
@@ -463,60 +512,154 @@ Fine-tune a small LLM to generate semantic IDs from user queries.
 ### Quick Start
 
 ```bash
-python -m scripts.finetune_llm
+# Stage 1 only (embedding training - backbone frozen)
+python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1
+
+# Stage 2 only (LoRA fine-tuning)
+python -m scripts.train_llm --config configs/stage2_config.yaml --stage 2
+
+# Both stages sequentially (recommended for full training)
+python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1,2 --stage2-config configs/stage2_config.yaml
 ```
 
-### Configuration
+### Stage 1 Configuration
 
-Edit `config.yaml`:
+Create `configs/stage1_config.yaml`:
 
 ```yaml
-llm:
-  base_model: "unsloth/Qwen3-4B"  # Or "unsloth/Ministral-3B-Instruct"
-  lora_r: 16
-  lora_alpha: 32
-  max_epochs: 3
-  batch_size: 4
-  gradient_accumulation_steps: 4
+# RQ-VAE Model Source (load from W&B artifact)
+wandb_rqvae_artifact: "rqvae-model:latest"
+
+# Catalogue (must match RQ-VAE training)
+catalogue_path: "data/catalogue.jsonl"
+catalogue_id_field: "id"
+embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+embeddings_cache_path: "data/embeddings.pt"
+
+# Query templates for training data
+query_templates:
+  predict_semantic_id:
+    - "{title}"
+    - "Find: {title}"
+    - "Search for {title} {description}"
+  predict_attribute:
+    - "What is the {field_name} for {semantic_id}?"
+
+field_mapping:
+  title: "title"
+  description: "description"
+
+num_examples_per_item: 5
+predict_semantic_id_ratio: 0.8
+val_split: 0.1
+
+# Base LLM
+base_model: "HuggingFaceTB/SmolLM2-135M-Instruct"
+max_seq_length: 512
+load_in_4bit: false
+
+# Stage 1: Embedding training (backbone frozen)
+stage: 1
+
+# Training hyperparameters
+learning_rate: 1.0e-3
+batch_size: 32
+num_train_epochs: 5
+warmup_ratio: 0.03
+
+# Output
+output_dir: "checkpoints/llm_stage1"
+semantic_ids_output_path: "data/semantic_ids.json"
+
+# W&B configuration
+wandb_project: "semantic-id-recommender"
+wandb_run_name: "llm-stage1"
+log_wandb_artifacts: true
+
+# Test queries for evaluation
+recommendation_test_queries:
+  - "Find a wireless mouse"
+  - "Search for mechanical keyboard"
+```
+
+### Stage 2 Configuration
+
+Create `configs/stage2_config.yaml`:
+
+```yaml
+# RQ-VAE Model Source (same as stage 1)
+wandb_rqvae_artifact: "rqvae-model:latest"
+
+# Catalogue (must match)
+catalogue_path: "data/catalogue.jsonl"
+catalogue_id_field: "id"
+embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+embeddings_cache_path: "data/embeddings.pt"
+
+# Same query templates as stage 1
+query_templates:
+  predict_semantic_id:
+    - "{title}"
+    - "Find: {title}"
+    - "Search for {title} {description}"
+
+# Stage 2: LoRA fine-tuning
+stage: 2
+wandb_stage1_artifact: "llm-stage1:latest"  # Load stage 1 from W&B
+
+# LoRA settings
+lora_r: 512
+lora_alpha: 512
+lora_dropout: 0.05
+
+# Training hyperparameters
+learning_rate: 2.0e-4
+batch_size: 32
+num_train_epochs: 5
+
+# Output
+output_dir: "checkpoints/llm_stage2"
+
+# W&B configuration
+wandb_project: "semantic-id-recommender"
+wandb_run_name: "llm-stage2"
+log_wandb_artifacts: true
 ```
 
 ### What Happens
 
-1. Generates training data from catalogue + semantic IDs
-2. Creates query → semantic ID pairs
-3. Fine-tunes with QLoRA using Unsloth
-4. Saves model to `checkpoints/llm/`
+**Stage 1 (Embedding Training)**:
+1. Loads RQ-VAE from W&B artifact
+2. Creates semantic ID mapping for all items
+3. Adds semantic ID tokens to LLM vocabulary
+4. Freezes backbone, trains only embedding layers
+5. Logs model to W&B artifact
 
-### Push to HuggingFace Hub
-
-**First, create a private HuggingFace repository:**
-
-```bash
-# Option 1: Using the UI
-# Go to https://huggingface.co/new and create a private Model repository
-
-# Option 2: Using CLI
-huggingface-cli login
-huggingface-cli repo create semantic-recommender --type model --private
-```
-
-**Then push your fine-tuned model:**
-
-```bash
-python -m scripts.finetune_llm --push-to-hub --hub-repo "your-username/semantic-recommender"
-```
+**Stage 2 (LoRA Fine-tuning)**:
+1. Loads stage 1 checkpoint
+2. Applies LoRA adapters to all layers
+3. Fine-tunes on semantic ID prediction task
+4. Saves final model
 
 ### Expected Output
 
 ```
-Preparing training data...
-Generated 30000 training examples
-Train: 27000, Val: 3000
-Fine-tuning unsloth/Qwen3-4B...
-Epoch 1/3: loss=2.34
-Epoch 2/3: loss=0.89
-Epoch 3/3: loss=0.45
-Model saved to checkpoints/llm
+=== Starting LLM Training - Stage 1 ===
+Base model: HuggingFaceTB/SmolLM2-135M-Instruct
+Mode: Embedding training (backbone frozen)
+RQ-VAE source: W&B artifact 'rqvae-model:latest'
+...
+Stage 1 Training Complete!
+
+Cleared GPU memory
+
+=== Starting LLM Training - Stage 2 ===
+Mode: LoRA fine-tuning
+LoRA rank: 512
+...
+Stage 2 Training Complete!
+
+All Training Complete!
 ```
 
 ### Weights & Biases Logging
@@ -655,10 +798,10 @@ For testing without local GPU, use the provided Colab notebook.
 !pip install -e ".[dev]"
 
 # Test RQ-VAE
-!python -m scripts.train_rqvae --create-dummy --dummy-size 100
+!python -m scripts.train_rqvae --config configs/rqvae_config.yaml --create-dummy --dummy-size 100
 
 # Test LLM (requires GPU)
-!python -m scripts.finetune_llm --base-model "unsloth/Qwen3-0.6B"
+!python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1
 ```
 
 ---
@@ -667,24 +810,20 @@ For testing without local GPU, use the provided Colab notebook.
 
 ### Out of Memory (LLM Fine-tuning)
 
+Reduce batch size in your config:
 ```yaml
-# Reduce batch size in config
-llm:
-  batch_size: 2
-  gradient_accumulation_steps: 8
+batch_size: 2
+gradient_accumulation_steps: 8
 ```
 
 Or use a smaller model:
-```bash
-python -m scripts.finetune_llm --base-model "unsloth/Qwen3-0.6B"
+```yaml
+base_model: "HuggingFaceTB/SmolLM2-135M-Instruct"
 ```
 
 ### Slow Embedding Generation
 
-```yaml
-# Use GPU for embeddings
-# The script auto-detects GPU, but ensure CUDA is available
-```
+Use GPU for embeddings - the script auto-detects GPU, but ensure CUDA is available.
 
 ### Modal Deployment Fails
 
@@ -714,35 +853,89 @@ modal deploy src/inference/modal_app.py
 export HF_TOKEN="your-token"
 ```
 
+### Training Interrupted / Connection Lost
+
+If you used tmux, simply reattach:
+```bash
+tmux attach -t training
+```
+
+If not using tmux and training was interrupted, restart from the last checkpoint:
+```bash
+# For RQ-VAE: Training restarts from scratch (fast)
+python -m scripts.train_rqvae --config configs/rqvae_config.yaml
+
+# For LLM: If stage 1 completed, start from stage 2
+python -m scripts.train_llm --config configs/stage2_config.yaml --stage 2
+```
+
 ---
 
 ## Project Structure Reference
 
 ```
 semantic_id_recommender/
-├── config.sample.yaml          # Sample configuration (copy to config.yaml)
-├── config.yaml                 # Your local configuration (gitignored)
+├── configs/                    # Training configs (gitignored, user-specific)
+│   ├── rqvae_config.yaml       # RQ-VAE config
+│   ├── stage1_config.yaml      # LLM stage 1 config
+│   └── stage2_config.yaml      # LLM stage 2 config
 ├── data/
-│   ├── catalogue.json          # Your item catalogue
+│   ├── catalogue.jsonl         # Your item catalogue
 │   ├── embeddings.pt           # Cached embeddings (generated)
-│   ├── semantic_ids.json       # Semantic ID mapping (generated)
-│   ├── train.jsonl             # Training data (generated)
-│   └── val.jsonl               # Validation data (generated)
+│   └── semantic_ids.json       # Semantic ID mapping (generated)
 ├── checkpoints/
-│   ├── rqvae/                  # RQ-VAE checkpoints
-│   └── llm/                    # Fine-tuned LLM
+│   ├── llm_stage1/             # Stage 1 checkpoint
+│   └── llm_stage2/             # Stage 2 checkpoint
+├── models/
+│   └── rqvae_model.pt          # RQ-VAE model
 ├── src/
-│   ├── config/                 # Config loader
 │   ├── rqvae/                  # RQ-VAE implementation
 │   ├── llm/                    # LLM fine-tuning
 │   ├── inference/              # Modal deployment
 │   └── frontend/               # Gradio UI
 ├── scripts/
-│   ├── train_rqvae.py          # Stage 1
-│   ├── finetune_llm.py         # Stage 2
-│   └── deploy.py               # Stage 3
+│   ├── train_rqvae.py          # RQ-VAE training script
+│   ├── train_llm.py            # LLM training script (stages 1 & 2)
+│   └── deploy.py               # Modal deployment
 └── notebooks/
-    └── test_training.ipynb     # Colab notebook
+    ├── train_rqvae.ipynb       # RQ-VAE training notebook
+    └── train_llm.ipynb         # LLM training notebook
+```
+
+---
+
+## CLI Reference
+
+### train_rqvae
+
+```bash
+python -m scripts.train_rqvae --config <config.yaml> [--create-dummy] [--dummy-size N]
+
+Options:
+  --config         Path to YAML config file (required)
+  --create-dummy   Create a dummy catalogue for testing
+  --dummy-size     Size of dummy catalogue (default: 1000)
+```
+
+### train_llm
+
+```bash
+python -m scripts.train_llm --config <config.yaml> --stage <1|2|1,2> [--stage2-config <config.yaml>]
+
+Options:
+  --config         Path to YAML config file (required)
+  --stage          Stage(s) to run: '1', '2', or '1,2' (default: 1)
+  --stage2-config  Path to stage 2 config (required when --stage=1,2)
+
+Examples:
+  # Stage 1 only
+  python -m scripts.train_llm --config stage1_config.yaml --stage 1
+
+  # Stage 2 only
+  python -m scripts.train_llm --config stage2_config.yaml --stage 2
+
+  # Both stages
+  python -m scripts.train_llm --config stage1_config.yaml --stage 1,2 --stage2-config stage2_config.yaml
 ```
 
 ---

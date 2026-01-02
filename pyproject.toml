@@ -39,7 +39,8 @@ dev = [
 
 [project.scripts]
 train-rqvae = "scripts.train_rqvae:main"
-finetune-llm = "scripts.finetune_llm:main"
+train-llm = "scripts.train_llm:main"
+finetune-llm = "scripts.finetune_llm:main"  # Deprecated, use train-llm
 
 [dependency-groups]
 dev = [

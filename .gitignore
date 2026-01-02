@@ -213,6 +213,10 @@ data/*
 # Config (use config.sample.yaml as template)
 config.yaml
 
+# Configs folder - keep folder but ignore contents (user-specific)
+configs/*
+!configs/.gitkeep
+
 # Checkpoints (model weights are large)
 checkpoints/
 
