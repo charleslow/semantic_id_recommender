@@ -317,6 +317,7 @@ def finetune_model(
 
     # Create formatting function for Unsloth compatibility with multiprocessing
     # This pre-applies the chat template so the tokenizer doesn't need to be pickled
+    # Must return a list of strings, not a dict
     def formatting_func(examples):
         """Format messages using chat template."""
         texts = []
@@ -329,7 +330,7 @@ def finetune_model(
                 list(messages), tokenize=False, add_generation_prompt=False
             )
             texts.append(text)
-        return {"text": texts}
+        return texts
 
     sft_config = SFTConfig(
         output_dir=config.output_dir,

@@ -246,18 +246,18 @@ class TestSFTTrainerIntegration:
         )
 
         # Formatting function required by Unsloth for multiprocessing
+        # Must return a list of strings, not a dict
         def formatting_func(examples):
             texts = []
             for messages in examples["messages"]:
-                # Ensure messages is a list of dicts (Dataset may store as separate columns)
+                # Ensure messages is a proper list of dicts
                 if isinstance(messages, dict):
-                    # Single message case - wrap in list
                     messages = [messages]
                 text = tokenizer.apply_chat_template(
                     list(messages), tokenize=False, add_generation_prompt=False
                 )
                 texts.append(text)
-            return {"text": texts}
+            return texts
 
         config = SFTConfig(
             output_dir="/tmp/test_sft_unsloth",
