@@ -222,7 +222,15 @@ def finetune_model(
             r=config.lora_r,
             lora_alpha=config.lora_alpha,
             lora_dropout=config.lora_dropout,
-            target_modules="all-linear",
+            target_modules=[
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
             bias="none",
             use_gradient_checkpointing="unsloth"
             if config.gradient_checkpointing
