@@ -6,28 +6,44 @@ Run on a GPU machine (e.g., RunPod) with:
     python test_pickle_issue.py
 """
 
+from unsloth import FastLanguageModel  # isort: skip
+
 from datasets import Dataset
 from trl import SFTConfig, SFTTrainer
-from unsloth import FastLanguageModel
+
 
 def create_test_dataset() -> Dataset:
     """Create a test dataset matching the format from finetune.py."""
     # Simulate the format from format_as_messages() in src/llm/data.py
     examples = []
     queries = [
-        ("Find: Blue Widget", "[SEM_START][SEM_0_1][SEM_1_2][SEM_2_3][SEM_3_4][SEM_END]"),
-        ("Search for Red Gadget", "[SEM_START][SEM_0_5][SEM_1_6][SEM_2_7][SEM_3_8][SEM_END]"),
-        ("Recommend: Green Tool", "[SEM_START][SEM_0_9][SEM_1_10][SEM_2_11][SEM_3_12][SEM_END]"),
-        ("Show me Yellow Device", "[SEM_START][SEM_0_13][SEM_1_14][SEM_2_15][SEM_3_16][SEM_END]"),
+        (
+            "Find: Blue Widget",
+            "[SEM_START][SEM_0_1][SEM_1_2][SEM_2_3][SEM_3_4][SEM_END]",
+        ),
+        (
+            "Search for Red Gadget",
+            "[SEM_START][SEM_0_5][SEM_1_6][SEM_2_7][SEM_3_8][SEM_END]",
+        ),
+        (
+            "Recommend: Green Tool",
+            "[SEM_START][SEM_0_9][SEM_1_10][SEM_2_11][SEM_3_12][SEM_END]",
+        ),
+        (
+            "Show me Yellow Device",
+            "[SEM_START][SEM_0_13][SEM_1_14][SEM_2_15][SEM_3_16][SEM_END]",
+        ),
     ]
 
     for query, response in queries * 10:  # 40 examples
-        examples.append({
-            "messages": [
-                {"role": "user", "content": query},
-                {"role": "assistant", "content": response},
-            ]
-        })
+        examples.append(
+            {
+                "messages": [
+                    {"role": "user", "content": query},
+                    {"role": "assistant", "content": response},
+                ]
+            }
+        )
 
     return Dataset.from_list(examples)
 
