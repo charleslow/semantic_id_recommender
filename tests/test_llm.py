@@ -249,8 +249,12 @@ class TestSFTTrainerIntegration:
         def formatting_func(examples):
             texts = []
             for messages in examples["messages"]:
+                # Ensure messages is a list of dicts (Dataset may store as separate columns)
+                if isinstance(messages, dict):
+                    # Single message case - wrap in list
+                    messages = [messages]
                 text = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=False
+                    list(messages), tokenize=False, add_generation_prompt=False
                 )
                 texts.append(text)
             return {"text": texts}

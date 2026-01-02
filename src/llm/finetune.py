@@ -321,8 +321,12 @@ def finetune_model(
         """Format messages using chat template."""
         texts = []
         for messages in examples["messages"]:
+            # Ensure messages is a proper list of dicts
+            # (Dataset may store nested structures differently)
+            if isinstance(messages, dict):
+                messages = [messages]
             text = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
+                list(messages), tokenize=False, add_generation_prompt=False
             )
             texts.append(text)
         return {"text": texts}
