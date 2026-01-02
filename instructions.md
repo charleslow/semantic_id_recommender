@@ -55,8 +55,118 @@ Before launching your pod, set up your API tokens as environment variables.
 
 1. Add your public SSH key to RunPod first (**Settings** → **SSH Keys**)
 2. In your pod's **Connect** menu, use **SSH over exposed TCP** (not the proxy method)
+3. Note the connection details: `ssh root@<POD_IP> -p <POD_PORT> -i ~/.ssh/id_ed25519`
 
-### 2.4 Setup the Environment
+### 2.4 Connect Using VS Code Remote SSH (Recommended)
+
+Using VS Code's Remote SSH extension provides a full IDE experience on your RunPod instance.
+
+#### Install the Extension
+
+1. Open VS Code
+2. Go to **Extensions** (Ctrl+Shift+X)
+3. Search for "Remote - SSH" and install the extension by Microsoft
+
+#### Configure SSH Host
+
+1. Open the Command Palette (Ctrl+Shift+P)
+2. Type "Remote-SSH: Open SSH Configuration File" and select it
+3. Choose your SSH config file (usually `~/.ssh/config`)
+4. Add an entry for your RunPod pod:
+
+```
+Host runpod
+    HostName <POD_IP>
+    User root
+    Port <POD_PORT>
+    IdentityFile ~/.ssh/id_ed25519
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    PubkeyAuthentication yes
+```
+
+> **Note**: Replace `<POD_IP>` and `<POD_PORT>` with the values from your pod's **Connect** menu (SSH over exposed TCP).
+
+#### WSL / Devcontainer Users
+
+If you're running VS Code in WSL or a devcontainer, VS Code Remote SSH uses the **Windows** SSH config (`C:\Users\<username>\.ssh\config`), not the Linux one.
+
+**Option 1: Use Windows SSH config (Recommended)**
+
+Edit your Windows SSH config file at `C:\Users\<username>\.ssh\config` and add the RunPod entry there. Make sure your SSH key is also accessible from Windows.
+
+```bash
+# Copy SSH key from devcontainer/WSL to Windows
+cp ~/.ssh/id_ed25519 /mnt/c/Users/<username>/.ssh/
+cp ~/.ssh/id_ed25519.pub /mnt/c/Users/<username>/.ssh/
+```
+
+Then update the Windows SSH config at `C:\Users\<username>\.ssh\config`:
+
+```
+Host runpod
+    HostName <POD_IP>
+    User root
+    Port <POD_PORT>
+    IdentityFile C:\Users\<username>\.ssh\id_ed25519
+    StrictHostKeyChecking no
+    UserKnownHostsFile NUL
+    PubkeyAuthentication yes
+```
+
+**Option 2: Copy SSH key into devcontainer**
+
+```bash
+# Inside your devcontainer, create .ssh directory
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+
+# Copy your key from Windows mount (adjust path as needed)
+cp /mnt/c/Users/<username>/.ssh/id_ed25519 ~/.ssh/
+cp /mnt/c/Users/<username>/.ssh/id_ed25519.pub ~/.ssh/
+chmod 600 ~/.ssh/id_ed25519
+
+# Create SSH config inside devcontainer
+cat >> ~/.ssh/config << 'EOF'
+Host runpod
+    HostName <POD_IP>
+    User root
+    Port <POD_PORT>
+    IdentityFile ~/.ssh/id_ed25519
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    PubkeyAuthentication yes
+    IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config
+```
+
+Then connect from the devcontainer terminal: `ssh runpod`
+
+**Option 3: Configure VS Code to use WSL SSH**
+
+In VS Code settings, add:
+```json
+"remote.SSH.path": "/usr/bin/ssh"
+```
+This tells VS Code to use the Linux SSH binary instead of Windows.
+
+#### Connect to RunPod
+
+1. Open the Command Palette (Ctrl+Shift+P)
+2. Type "Remote-SSH: Connect to Host" and select it
+3. Select `runpod` from the list
+4. VS Code will open a new window connected to your pod
+5. Open the folder `/workspace/semantic_id_recommender`
+
+#### Tips for Remote Development
+
+- **Install extensions on remote**: Some extensions need to be installed on the remote machine. VS Code will prompt you to install them.
+- **Terminal access**: Use VS Code's integrated terminal (Ctrl+`) to run commands directly on the pod
+- **Port forwarding**: VS Code automatically forwards ports. If you run a Jupyter notebook or web server, it will be accessible locally.
+- **Reconnecting**: If the connection drops, VS Code will attempt to reconnect automatically. You can also manually reconnect via the Command Palette.
+
+### 2.5 Setup the Environment
 
 On the RunPod pod, clone the repository and install dependencies:
 
@@ -78,7 +188,7 @@ uv pip install ipykernel
 python -m ipykernel install --user --name=semantic-id-recommender --display-name="Python (semantic-id-recommender)"
 ```
 
-### 2.5 Transfer Data to RunPod
+### 2.6 Transfer Data to RunPod
 
 From your **local machine**, transfer your data files using scp:
 
@@ -96,7 +206,7 @@ ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519 \
 
 > **Note**: Use the **SSH over exposed TCP** connection (direct IP and port) from Step 2.3.
 
-### 2.6 Run Training with tmux
+### 2.7 Run Training with tmux
 
 > **Important**: Always use `tmux` for long-running training jobs. This ensures training continues even if your SSH connection drops.
 
@@ -151,7 +261,7 @@ python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1,2 --st
 | Create a new window in the same session     | `Ctrl+B`, then `C`           |
 | Switch between windows                      | `Ctrl+B`, then window number (0, 1, 2...) |
 
-### 2.7 Save Models to HuggingFace Hub
+### 2.8 Save Models to HuggingFace Hub
 
 After training completes, push your models to HuggingFace Hub (required for deployment).
 
