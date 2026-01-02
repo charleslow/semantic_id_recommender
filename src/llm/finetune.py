@@ -171,49 +171,65 @@ def freeze_backbone(model, num_new_tokens: int = 0) -> list:
     return hook_handles
 
 
-class FormattingFunc:
+def pretokenize_dataset(
+    dataset: Dataset,
+    tokenizer: PreTrainedTokenizerBase,
+    max_length: int,
+    num_proc: int = 4,
+) -> Dataset:
     """
-    Picklable formatting function for SFTTrainer.
+    Pre-tokenize a dataset with chat messages.
 
-    Using a class instead of a closure to avoid pickling issues with
-    multiprocessing when the tokenizer captures unpicklable config objects.
+    This avoids passing the tokenizer to SFTTrainer, which can cause
+    pickle errors with Unsloth due to ConfigModuleInstance objects.
+
+    Args:
+        dataset: Dataset with 'messages' column
+        tokenizer: Tokenizer to use
+        max_length: Maximum sequence length
+        num_proc: Number of processes for parallel tokenization
+
+    Returns:
+        Dataset with 'input_ids', 'attention_mask', and 'labels' columns
     """
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase):
-        # Store only the chat template string, not the whole tokenizer
-        self.chat_template = tokenizer.chat_template
-        self.eos_token = tokenizer.eos_token
-        self.bos_token = tokenizer.bos_token
-
-    def __call__(self, examples):
-        """Format examples for training using the tokenizer's chat template."""
-        from jinja2 import Template
-
+    def tokenize_fn(examples):
         messages_list = examples["messages"]
 
-        # Handle both single example and batched examples
-        if messages_list and isinstance(messages_list[0], dict):
-            messages_list = [messages_list]
-
-        output_texts = []
-        template = Template(self.chat_template)
+        # Format messages using chat template
+        texts = []
         for messages in messages_list:
-            text = template.render(
-                messages=messages,
-                eos_token=self.eos_token,
-                bos_token=self.bos_token,
+            text = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
                 add_generation_prompt=False,
             )
-            output_texts.append(text)
+            texts.append(text)
 
-        return output_texts
+        # Tokenize
+        tokenized = tokenizer(
+            texts,
+            truncation=True,
+            max_length=max_length,
+            padding=False,
+            return_tensors=None,
+        )
 
+        # For causal LM, labels are the same as input_ids
+        tokenized["labels"] = tokenized["input_ids"].copy()
 
-def create_formatting_func(
-    tokenizer: PreTrainedTokenizerBase,
-) -> callable:
-    """Create a formatting function that uses the tokenizer's chat template."""
-    return FormattingFunc(tokenizer)
+        return tokenized
+
+    # Tokenize in parallel - this happens before trainer, avoiding pickle issues
+    tokenized = dataset.map(
+        tokenize_fn,
+        batched=True,
+        num_proc=num_proc,
+        remove_columns=dataset.column_names,
+        desc="Tokenizing",
+    )
+
+    return tokenized
 
 
 def _load_model_unsloth(config: FinetuneConfig, model_to_load: str):
@@ -356,21 +372,29 @@ def finetune_model(
         use_fp16 = False
         optim = "adamw_torch"  # Standard optimizer for CPU
 
-    # Make tokenizer picklable for multiprocessing by saving and reloading
-    # This removes unpicklable ConfigModuleInstance objects
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tokenizer.save_pretrained(tmpdir)
-        from transformers import AutoTokenizer
-
-        tokenizer = AutoTokenizer.from_pretrained(tmpdir)
+    # Pre-tokenize datasets to avoid passing tokenizer to SFTTrainer
+    # This prevents pickle errors with Unsloth's ConfigModuleInstance objects
+    print("Pre-tokenizing datasets...")
+    train_dataset_tokenized = pretokenize_dataset(
+        train_dataset,
+        tokenizer,
+        max_length=config.max_length,
+        num_proc=config.num_proc,
+    )
+    val_dataset_tokenized = None
+    if val_dataset is not None:
+        val_dataset_tokenized = pretokenize_dataset(
+            val_dataset,
+            tokenizer,
+            max_length=config.max_length,
+            num_proc=config.num_proc,
+        )
 
     # Build SFTConfig
     sft_config = SFTConfig(
         output_dir=config.output_dir,
-        # Dataset processing
-        dataset_num_proc=config.num_proc,
+        # Dataset already tokenized, no processing needed
+        dataset_num_proc=1,
         # Batch and accumulation
         per_device_train_batch_size=config.batch_size,
         per_device_eval_batch_size=config.batch_size,
@@ -407,12 +431,9 @@ def finetune_model(
         # Sequence length
         max_length=config.max_length,
         packing=False,
-        # DataLoader
+        # DataLoader - can use multiprocessing since data is pre-tokenized
         dataloader_num_workers=config.dataloader_num_workers,
     )
-
-    # Create formatting function with tokenizer's chat template
-    formatting_func = create_formatting_func(tokenizer)
 
     # Create callbacks
     callbacks = []
@@ -444,14 +465,12 @@ def finetune_model(
         )
         callbacks.append(artifact_callback)
 
-    # Create trainer
+    # Create trainer with pre-tokenized data (no processing_class or formatting_func needed)
     trainer = SFTTrainer(
         model=model,
-        processing_class=tokenizer,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
+        train_dataset=train_dataset_tokenized,
+        eval_dataset=val_dataset_tokenized,
         args=sft_config,
-        formatting_func=formatting_func,
         callbacks=callbacks if callbacks else None,
     )
 
