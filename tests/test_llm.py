@@ -281,8 +281,8 @@ class TestSFTTrainerIntegration:
             )
             return {"text": text}
 
-        # Apply with num_proc=1 to avoid pickle issues during preprocessing
-        training_dataset = training_dataset.map(apply_chat_template, num_proc=1)
+        # Apply with num_proc=4 to test if pickle issues occur at this step
+        training_dataset = training_dataset.map(apply_chat_template, num_proc=4)
 
         config = SFTConfig(
             output_dir="/tmp/test_sft_unsloth",

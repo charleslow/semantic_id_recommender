@@ -326,10 +326,11 @@ def finetune_model(
         )
         return {"text": text}
 
-    # Apply with num_proc=1 to avoid pickle issues during preprocessing
-    train_dataset = train_dataset.map(apply_chat_template, num_proc=1)
+    # Apply chat template preprocessing
+    # Using dataset_num_proc to test if pickle issues occur at this step
+    train_dataset = train_dataset.map(apply_chat_template, num_proc=dataset_num_proc)
     if val_dataset is not None:
-        val_dataset = val_dataset.map(apply_chat_template, num_proc=1)
+        val_dataset = val_dataset.map(apply_chat_template, num_proc=dataset_num_proc)
 
     sft_config = SFTConfig(
         output_dir=config.output_dir,
