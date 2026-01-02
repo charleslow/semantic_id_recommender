@@ -289,7 +289,7 @@ class TestSFTTrainerIntegration:
             max_steps=1,
             per_device_train_batch_size=2,
             report_to="none",
-            dataset_num_proc=4,  # Now safe - no formatting_func needed
+            dataset_num_proc=4,
             dataloader_num_workers=0,
             logging_steps=1,
             max_length=128,

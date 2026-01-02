@@ -14,7 +14,7 @@ dependencies = [
     "tqdm>=4.66.0",
     "numpy>=1.24.0",
     "accelerate>=0.25.0",
-    "unsloth>=2025.12.5",
+    "unsloth==2025.12.5",
     "lightning>=2.0.0",
     "rich>=13.0.0",
     "x-transformers>=2.11.24",
@@ -25,6 +25,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "pytest>=9.0.2",
     "matplotlib>=3.10.8",
+    "trl==0.20.0",
 ]
 
 [project.optional-dependencies]
