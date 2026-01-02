@@ -69,6 +69,7 @@ cd semantic_id_recommender
 # Install uv and dependencies
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.bashrc
+export PATH="$HOME/.local/bin:$PATH"
 uv sync
 source .venv/bin/activate
 
