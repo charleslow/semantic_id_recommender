@@ -199,6 +199,10 @@ scp -P ${POD_PORT} -i ~/.ssh/id_ed25519 \
   data/* \
   root@${POD_IP}:/workspace/semantic_id_recommender/data/
 
+scp -P ${POD_PORT} -i ~/.ssh/id_ed25519 \
+  configs/* \
+  root@${POD_IP}:/workspace/semantic_id_recommender/configs/
+
 # Verify files transferred
 ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519 \
   "ls -lh /workspace/semantic_id_recommender/data/"

@@ -26,6 +26,7 @@ from .callbacks import (
     log_wandb_artifact,
 )
 from .data import DEFAULT_SYSTEM_PROMPT, get_semantic_id_tokens
+from src.rqvae import load_from_wandb, load_from_path
 
 
 @dataclass
@@ -574,85 +575,6 @@ class LLMTrainResult:
     metrics: dict | None = None
 
 
-def load_rqvae_from_wandb(
-    artifact_name: str,
-    project: str | None = None,
-    entity: str | None = None,
-) -> tuple["SemanticRQVAE", dict]:  # noqa: F821
-    """
-    Load RQ-VAE model from a wandb artifact.
-
-    Args:
-        artifact_name: Artifact name with version (e.g., "rqvae-model:v3" or "rqvae-model:latest")
-        project: W&B project name (optional, uses current run's project if None)
-        entity: W&B entity/username (optional)
-
-    Returns:
-        Tuple of (model, config_dict)
-    """
-    import wandb
-
-    from src.rqvae.model import SemanticRQVAE, SemanticRQVAEConfig
-
-    # Build artifact path
-    if project:
-        if entity:
-            artifact_path = f"{entity}/{project}/{artifact_name}"
-        else:
-            artifact_path = f"{project}/{artifact_name}"
-    else:
-        artifact_path = artifact_name
-
-    # Download artifact
-    if wandb.run is not None:
-        artifact = wandb.run.use_artifact(artifact_path, type="model")
-    else:
-        api = wandb.Api()
-        artifact = api.artifact(artifact_path, type="model")
-
-    artifact_dir = artifact.download()
-    model_path = Path(artifact_dir) / "rqvae_model.pt"
-
-    # Load checkpoint
-    checkpoint = torch.load(model_path, map_location="cpu")
-    config_dict = checkpoint["config"]
-
-    # Create model
-    config = SemanticRQVAEConfig(**config_dict)
-    model = SemanticRQVAE(config)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-    print(f"Loaded RQ-VAE from artifact: {artifact_path}")
-    print(f"  Config: {config_dict}")
-
-    return model, config_dict
-
-
-def load_rqvae_from_path(model_path: str) -> tuple["SemanticRQVAE", dict]:  # noqa: F821
-    """
-    Load RQ-VAE model from a local path.
-
-    Args:
-        model_path: Path to the model checkpoint file
-
-    Returns:
-        Tuple of (model, config_dict)
-    """
-    from src.rqvae.model import SemanticRQVAE, SemanticRQVAEConfig
-
-    checkpoint = torch.load(model_path, map_location="cpu")
-    config_dict = checkpoint["config"]
-
-    config = SemanticRQVAEConfig(**config_dict)
-    model = SemanticRQVAE(config)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-    print(f"Loaded RQ-VAE from: {model_path}")
-    print(f"  Config: {config_dict}")
-
-    return model, config_dict
 
 
 def create_semantic_id_mapping(
@@ -802,12 +724,12 @@ def train(config: LLMTrainConfig) -> LLMTrainResult:
         print("\n=== Loading RQ-VAE Model ===")
         if config.wandb_rqvae_artifact:
             rqvae_project = config.wandb_rqvae_project or config.wandb_project
-            rqvae_model, rqvae_config = load_rqvae_from_wandb(
+            rqvae_model, rqvae_config = load_from_wandb(
                 artifact_name=config.wandb_rqvae_artifact,
                 project=rqvae_project,
             )
         elif config.rqvae_model_path:
-            rqvae_model, rqvae_config = load_rqvae_from_path(config.rqvae_model_path)
+            rqvae_model, rqvae_config = load_from_path(config.rqvae_model_path)
         else:
             raise ValueError(
                 "Must specify either wandb_rqvae_artifact or rqvae_model_path"
