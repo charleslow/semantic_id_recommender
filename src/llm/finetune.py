@@ -528,6 +528,20 @@ def finetune_model(
     model.save_pretrained(config.output_dir)
     tokenizer.save_pretrained(config.output_dir)
 
+    # Debug: Print contents of output directory
+    print(f"\n=== Contents of {config.output_dir} after save_pretrained ===")
+    output_path = Path(config.output_dir)
+    if output_path.exists():
+        for item in sorted(output_path.iterdir()):
+            if item.is_file():
+                size_mb = item.stat().st_size / (1024 * 1024)
+                print(f"  FILE: {item.name} ({size_mb:.2f} MB)")
+            elif item.is_dir():
+                print(f"  DIR:  {item.name}/")
+    else:
+        print("  ERROR: Directory does not exist!")
+    print("=" * 60)
+
     # Log artifact to W&B after saving (must happen after save_pretrained)
     if config.log_wandb_artifacts and config.report_to == "wandb":
         log_wandb_artifact(
