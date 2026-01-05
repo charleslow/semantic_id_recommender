@@ -8,7 +8,9 @@ from unsloth import FastLanguageModel  # isort: skip
 
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
+
+import wandb
 
 # Required for Unsloth 2024.11+ with TRL 0.20+ - enables logits for loss calculation
 os.environ["UNSLOTH_RETURN_LOGITS"] = "1"
@@ -20,13 +22,14 @@ from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 from trl import SFTConfig, SFTTrainer
 
+from src.rqvae import load_from_path, load_from_wandb
+
 from .callbacks import (
     RecommendationTestCallback,
     SemanticIDEvalCallback,
     log_wandb_artifact,
 )
 from .data import DEFAULT_SYSTEM_PROMPT, get_semantic_id_tokens
-from src.rqvae import load_from_wandb, load_from_path
 
 
 @dataclass
@@ -93,6 +96,86 @@ class FinetuneConfig:
     semantic_id_to_item: dict[str, dict] | None = None
 
 
+@dataclass
+class LLMTrainConfig(FinetuneConfig):
+    """
+    Comprehensive configuration for end-to-end LLM training.
+
+    Extends FinetuneConfig with additional parameters for the full training pipeline:
+    - Loading RQ-VAE model from wandb artifacts
+    - Creating semantic ID mappings
+    - Preparing training data
+    - Training stage 1 (embedding) and/or stage 2 (LoRA)
+    - Logging artifacts to wandb
+
+    Example:
+        >>> config = LLMTrainConfig(
+        ...     wandb_rqvae_artifact="rqvae-model:latest",
+        ...     catalogue_path="data/catalogue.jsonl",
+        ...     stage=1,
+        ... )
+        >>> result = train(config)
+    """
+
+    # === RQ-VAE Model Source ===
+    # Option 1: Load from wandb artifact
+    wandb_rqvae_artifact: str | None = (
+        None  # e.g., "rqvae-model:v3" or "rqvae-model:latest"
+    )
+    wandb_rqvae_project: str | None = (
+        None  # e.g., "my-project" (defaults to wandb_project)
+    )
+    # Option 2: Load from local path
+    rqvae_model_path: str | None = None  # e.g., "models/rqvae_model.pt"
+
+    # === Catalogue and Data ===
+    catalogue_path: str = "data/catalogue.jsonl"
+    catalogue_id_field: str = "id"  # Field name for item IDs
+    embedding_model: str = "TaylorAI/gte-tiny"  # For generating embeddings
+    embeddings_cache_path: str | None = None  # Cache path for embeddings
+    embedding_batch_size: int = 32  # Batch size for embedding generation
+
+    # Query templates for training data generation
+    query_templates: dict[str, list[str]] | None = None
+    field_mapping: dict[str, str] | None = (
+        None  # Map template placeholders to catalogue fields
+    )
+    num_examples_per_item: int = 5
+    predict_semantic_id_ratio: float = (
+        0.8  # Ratio of semantic ID prediction vs attribute prediction
+    )
+    val_split: float = 0.1
+
+    # === Additional W&B Configuration ===
+    wandb_project: str | None = "semantic-id-recommender"
+    wandb_run_name: str | None = None
+    # For stage 2 from wandb: artifact name (e.g., "llm-stage1:latest")
+    wandb_stage1_artifact: str | None = None
+
+    # === Additional Output ===
+    semantic_ids_output_path: str = "data/semantic_ids.json"
+
+    def to_finetune_config(self) -> FinetuneConfig:
+        """Convert to FinetuneConfig for the finetune_model function."""
+        finetune_fields = {f.name for f in fields(FinetuneConfig)}
+        kwargs = {k: v for k, v in asdict(self).items() if k in finetune_fields}
+        # These will be set from RQ-VAE config
+        kwargs["num_quantizers"] = 0
+        kwargs["codebook_size"] = 0
+        return FinetuneConfig(**kwargs)
+
+
+@dataclass
+class LLMTrainResult:
+    """Result of LLM training."""
+
+    model: object  # The trained model
+    tokenizer: object  # The tokenizer
+    semantic_id_mapping: dict  # Mapping from item_id to semantic_id
+    config: LLMTrainConfig
+    metrics: dict | None = None
+
+
 def add_semantic_tokens(
     tokenizer: PreTrainedTokenizerBase,
     num_quantizers: int = 4,
@@ -112,6 +195,58 @@ def add_semantic_tokens(
     special_tokens = get_semantic_id_tokens(num_quantizers, codebook_size)
     tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
     return tokenizer
+
+
+LORA_TARGET_MODULES = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
+
+
+def apply_lora_adapters(model, config: "FinetuneConfig", use_unsloth: bool):
+    """
+    Apply LoRA adapters to the model.
+
+    Args:
+        model: The language model to apply LoRA to
+        config: Fine-tuning configuration
+        use_unsloth: Whether to use Unsloth for LoRA (GPU) or standard PEFT (CPU)
+
+    Returns:
+        Model with LoRA adapters applied
+    """
+    if use_unsloth:
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=config.lora_r,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            target_modules=LORA_TARGET_MODULES,
+            bias="none",
+            use_gradient_checkpointing="unsloth"
+            if config.gradient_checkpointing
+            else False,
+            random_state=config.seed,
+        )
+    else:
+        # Use standard PEFT for CPU
+        from peft import LoraConfig, get_peft_model
+
+        lora_config = LoraConfig(
+            r=config.lora_r,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            target_modules=LORA_TARGET_MODULES,
+            bias="none",
+        )
+        model = get_peft_model(model, lora_config)
+
+    return model
 
 
 def freeze_backbone(model, num_new_tokens: int = 0) -> list:
@@ -257,47 +392,7 @@ def finetune_model(
     # Add LoRA adapters (only for stage 2 or no stage)
     # Stage 1 trains embeddings directly without LoRA
     if config.stage != 1:
-        if use_unsloth:
-            model = FastLanguageModel.get_peft_model(
-                model,
-                r=config.lora_r,
-                lora_alpha=config.lora_alpha,
-                lora_dropout=config.lora_dropout,
-                target_modules=[
-                    "q_proj",
-                    "k_proj",
-                    "v_proj",
-                    "o_proj",
-                    "gate_proj",
-                    "up_proj",
-                    "down_proj",
-                ],
-                bias="none",
-                use_gradient_checkpointing="unsloth"
-                if config.gradient_checkpointing
-                else False,
-                random_state=config.seed,
-            )
-        else:
-            # Use standard PEFT for CPU
-            from peft import LoraConfig, get_peft_model
-
-            lora_config = LoraConfig(
-                r=config.lora_r,
-                lora_alpha=config.lora_alpha,
-                lora_dropout=config.lora_dropout,
-                target_modules=[
-                    "q_proj",
-                    "k_proj",
-                    "v_proj",
-                    "o_proj",
-                    "gate_proj",
-                    "up_proj",
-                    "down_proj",
-                ],
-                bias="none",
-            )
-            model = get_peft_model(model, lora_config)
+        model = apply_lora_adapters(model, config, use_unsloth)
 
     # Stage 1: Freeze all parameters except new token embeddings
     if config.stage == 1:
@@ -447,136 +542,6 @@ def finetune_model(
     return model, tokenizer
 
 
-@dataclass
-class LLMTrainConfig:
-    """
-    Comprehensive configuration for end-to-end LLM training.
-
-    This config captures all parameters needed to run the full training pipeline:
-    - Loading RQ-VAE model from wandb artifacts
-    - Creating semantic ID mappings
-    - Preparing training data
-    - Training stage 1 (embedding) and/or stage 2 (LoRA)
-    - Logging artifacts to wandb
-
-    Example:
-        >>> config = LLMTrainConfig(
-        ...     wandb_rqvae_artifact="rqvae-model:latest",
-        ...     catalogue_path="data/catalogue.jsonl",
-        ...     stage=1,
-        ... )
-        >>> result = train(config)
-    """
-
-    # === RQ-VAE Model Source ===
-    # Option 1: Load from wandb artifact
-    wandb_rqvae_artifact: str | None = (
-        None  # e.g., "rqvae-model:v3" or "rqvae-model:latest"
-    )
-    wandb_rqvae_project: str | None = (
-        None  # e.g., "my-project" (defaults to wandb_project)
-    )
-    # Option 2: Load from local path
-    rqvae_model_path: str | None = None  # e.g., "models/rqvae_model.pt"
-
-    # === Catalogue and Data ===
-    catalogue_path: str = "data/catalogue.jsonl"
-    catalogue_id_field: str = "id"  # Field name for item IDs
-    embedding_model: str = "TaylorAI/gte-tiny"  # For generating embeddings
-    embeddings_cache_path: str | None = None  # Cache path for embeddings
-    embedding_batch_size: int = 32  # Batch size for embedding generation
-
-    # Query templates for training data generation
-    query_templates: dict[str, list[str]] | None = None
-    field_mapping: dict[str, str] | None = (
-        None  # Map template placeholders to catalogue fields
-    )
-    num_examples_per_item: int = 5
-    predict_semantic_id_ratio: float = (
-        0.8  # Ratio of semantic ID prediction vs attribute prediction
-    )
-    val_split: float = 0.1
-
-    # === Base LLM ===
-    base_model: str = "HuggingFaceTB/SmolLM2-135M-Instruct"
-    max_length: int = 512
-    load_in_4bit: bool = True
-
-    # === Stage Training ===
-    stage: Literal[1, 2] = 1
-    # For stage 2: path to stage 1 checkpoint (local path or wandb artifact)
-    stage1_checkpoint: str | None = None
-    # For stage 2 from wandb: artifact name (e.g., "llm-stage1:latest")
-    wandb_stage1_artifact: str | None = None
-
-    # === LoRA Settings (Stage 2 only) ===
-    lora_r: int = 16
-    lora_alpha: int = 32
-    lora_dropout: float = 0.05
-
-    # === Training Hyperparameters ===
-    learning_rate: float = 2e-4
-    batch_size: int = 4
-    gradient_accumulation_steps: int = 4
-    num_train_epochs: int = 3
-    max_steps: int = -1
-    warmup_ratio: float = 0.03
-    warmup_steps: int = 0
-    weight_decay: float = 0.01
-    optim: str = "adamw_8bit"
-    lr_scheduler_type: str = "linear"
-    gradient_checkpointing: bool = True
-
-    # === Output ===
-    output_dir: str = "checkpoints/llm"
-    semantic_ids_output_path: str = "data/semantic_ids.json"
-
-    # === Logging and Saving ===
-    logging_steps: int = 10
-    save_strategy: str = "epoch"
-    save_steps: int = 500
-    save_total_limit: int = 2
-    eval_steps: int = 500
-
-    # === W&B Configuration ===
-    wandb_project: str | None = "semantic-id-recommender"
-    wandb_run_name: str | None = None
-    report_to: str = "wandb"
-    log_wandb_artifacts: bool = False
-    wandb_artifact_name: str | None = None
-
-    # === Evaluation ===
-    recommendation_test_queries: list[str] = field(default_factory=list)
-
-    # === Misc ===
-    seed: int = 42
-    num_proc: int = 4
-    dataloader_num_workers: int = 16
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT
-
-    def to_finetune_config(self) -> FinetuneConfig:
-        """Convert to FinetuneConfig for the finetune_model function."""
-        finetune_fields = {f.name for f in fields(FinetuneConfig)}
-        kwargs = {k: v for k, v in asdict(self).items() if k in finetune_fields}
-        # These will be set from RQ-VAE config
-        kwargs["num_quantizers"] = 0
-        kwargs["codebook_size"] = 0
-        return FinetuneConfig(**kwargs)
-
-
-@dataclass
-class LLMTrainResult:
-    """Result of LLM training."""
-
-    model: object  # The trained model
-    tokenizer: object  # The tokenizer
-    semantic_id_mapping: dict  # Mapping from item_id to semantic_id
-    config: LLMTrainConfig
-    metrics: dict | None = None
-
-
-
-
 def create_semantic_id_mapping(
     rqvae_model: "SemanticRQVAE",  # noqa: F821
     catalogue_path: str,
@@ -705,20 +670,13 @@ def train(config: LLMTrainConfig) -> LLMTrainResult:
     try:
         # === 1. Initialize W&B ===
         if config.wandb_project and config.report_to == "wandb":
-            try:
-                import wandb
-
-                run_name = config.wandb_run_name or f"llm-stage{config.stage}"
-                wandb_run = wandb.init(
-                    project=config.wandb_project,
-                    name=run_name,
-                    config=asdict(config),
-                )
-                print(f"W&B initialized: {wandb_run.url}")
-            except ImportError:
-                print("wandb not installed, skipping W&B logging")
-            except Exception as e:
-                print(f"Failed to initialize W&B: {e}")
+            run_name = config.wandb_run_name or f"llm-stage{config.stage}"
+            wandb_run = wandb.init(
+                project=config.wandb_project,
+                name=run_name,
+                config=asdict(config),
+            )
+            print(f"W&B initialized: {wandb_run.url}")
 
         # === 2. Load RQ-VAE Model ===
         print("\n=== Loading RQ-VAE Model ===")
