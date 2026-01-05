@@ -12,6 +12,8 @@ Usage:
     python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1,2 --stage2-config configs/stage2_config.yaml
 """
 
+import unsloth  # noqa: F401 isort: skip - Must be imported before transformers
+
 import argparse
 import gc
 from pathlib import Path

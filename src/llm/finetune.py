@@ -305,6 +305,11 @@ def finetune_model(
         num_new_tokens = 3 + config.num_quantizers * config.codebook_size
         freeze_backbone(model, num_new_tokens=num_new_tokens)
 
+        # Explicitly disable gradient checkpointing for stage 1
+        # This avoids AttributeError with '_gradient_checkpointing_func'
+        if hasattr(model, "gradient_checkpointing_disable"):
+            model.gradient_checkpointing_disable()
+
     # Determine precision and optimizer based on GPU availability
     if torch.cuda.is_available():
         use_bf16 = torch.cuda.is_bf16_supported()
