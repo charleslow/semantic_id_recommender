@@ -10,14 +10,13 @@ import json
 import os
 from dataclasses import asdict, dataclass, field, fields
 
-import wandb
-
 # Required for Unsloth 2024.11+ with TRL 0.20+ - enables logits for loss calculation
 os.environ["UNSLOTH_RETURN_LOGITS"] = "1"
 from pathlib import Path
 from typing import Literal
 
 import torch
+import wandb
 from datasets import Dataset
 from transformers import PreTrainedTokenizerBase
 from trl import SFTConfig, SFTTrainer
@@ -537,7 +536,7 @@ def finetune_model(
                 size_mb = item.stat().st_size / (1024 * 1024)
                 print(f"  FILE: {item.name} ({size_mb:.2f} MB)")
             elif item.is_dir():
-                print(f"  DIR:  {item.name}/")
+                print(f"  DIR:  {item.name}/ (Not displaying subdirectory contents)")
     else:
         print("  ERROR: Directory does not exist!")
     print("=" * 60)
@@ -769,8 +768,6 @@ def train(config: LLMTrainConfig) -> LLMTrainResult:
         stage1_checkpoint = config.stage1_checkpoint
         if config.stage == 2 and config.wandb_stage1_artifact and not stage1_checkpoint:
             # Download stage 1 artifact
-            import wandb
-
             # Build full artifact path (similar to load_rqvae_from_wandb)
             artifact_path = config.wandb_stage1_artifact
             if config.wandb_project and "/" not in artifact_path.split(":")[0]:
@@ -829,7 +826,5 @@ def train(config: LLMTrainConfig) -> LLMTrainResult:
     finally:
         # === 8. Clean up W&B ===
         if wandb_run:
-            import wandb
-
             wandb.finish()
             print("W&B run finished")
