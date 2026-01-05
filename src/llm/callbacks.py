@@ -419,12 +419,17 @@ def log_wandb_artifact(
     config: "FinetuneConfig" = None,  # noqa: F821
     train_examples: int = 0,
     val_examples: int = 0,
+    wandb_project: str | None = None,
+    wandb_run_id: str | None = None,
 ) -> bool:
     """
     Log the trained model as a W&B artifact.
 
     This function should be called AFTER the model has been saved to output_dir
     using model.save_pretrained() and tokenizer.save_pretrained().
+
+    If wandb.run is None (e.g., because the Trainer finished it), this function
+    will re-initialize the wandb run to log the artifact.
 
     Args:
         output_dir: Directory containing the saved model files
@@ -433,13 +438,29 @@ def log_wandb_artifact(
         config: Optional FinetuneConfig for metadata
         train_examples: Number of training examples (for metadata)
         val_examples: Number of validation examples (for metadata)
+        wandb_project: W&B project name (required if wandb.run is None)
+        wandb_run_id: Optional W&B run ID to resume (if wandb.run is None)
 
     Returns:
         True if artifact was logged successfully, False otherwise
     """
+    # Track if we created a new run (so we can finish it at the end)
+    created_new_run = False
+
     if wandb.run is None:
-        print("Warning: wandb.run is None, skipping artifact logging")
-        return False
+        print("Warning: wandb.run is None, attempting to re-initialize...")
+
+        if wandb_project is None:
+            print("Error: wandb_project must be provided when wandb.run is None")
+            return False
+
+        wandb.init(
+            project=wandb_project,
+            id=wandb_run_id,
+            resume="allow" if wandb_run_id else "never",
+        )
+        print(f"Re-initialized W&B run: {wandb.run.id}")
+        created_new_run = True
 
     output_path = Path(output_dir)
     print(f"\n=== Logging model artifact: {artifact_name} ===")
@@ -491,3 +512,8 @@ def log_wandb_artifact(
     except Exception as e:
         print(f"  Error logging artifact: {e}")
         return False
+    finally:
+        # Finish the run if we created it
+        if created_new_run:
+            wandb.finish()
+            print("Finished W&B run created for artifact logging")

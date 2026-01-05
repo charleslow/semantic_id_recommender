@@ -520,6 +520,10 @@ def finetune_model(
         callbacks=callbacks if callbacks else None,
     )
 
+    # Capture wandb info before training (trainer.train() will finish the run)
+    wandb_run_id = wandb.run.id if wandb.run is not None else None
+    wandb_project = wandb.run.project if wandb.run is not None else None
+
     # Train
     trainer.train()
 
@@ -550,6 +554,8 @@ def finetune_model(
             config=config,
             train_examples=len(train_dataset),
             val_examples=len(val_dataset) if val_dataset else 0,
+            wandb_project=wandb_project,
+            wandb_run_id=wandb_run_id,
         )
 
     return model, tokenizer
