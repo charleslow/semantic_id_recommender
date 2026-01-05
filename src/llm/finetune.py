@@ -23,7 +23,7 @@ from trl import SFTConfig, SFTTrainer
 from .callbacks import (
     RecommendationTestCallback,
     SemanticIDEvalCallback,
-    WandbArtifactCallback,
+    log_wandb_artifact,
 )
 from .data import DEFAULT_SYSTEM_PROMPT, get_semantic_id_tokens
 
@@ -78,7 +78,7 @@ class FinetuneConfig:
 
     # Misc
     seed: int = 42
-    num_proc: int = 4
+    num_proc: int = 16
     dataloader_num_workers: int = 16
     report_to: str = "wandb"
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
@@ -415,15 +415,6 @@ def finetune_model(
         )
         callbacks.append(recommendation_test_callback)
 
-    # Add artifact logging callback (logs at end of training while wandb run is active)
-    if config.log_wandb_artifacts and config.report_to == "wandb":
-        artifact_callback = WandbArtifactCallback(
-            config=config,
-            train_examples=len(train_dataset),
-            val_examples=len(val_dataset) if val_dataset else 0,
-        )
-        callbacks.append(artifact_callback)
-
     # Create trainer
     trainer = SFTTrainer(
         model=model,
@@ -437,9 +428,20 @@ def finetune_model(
     # Train
     trainer.train()
 
-    # Save
+    # Save model and tokenizer
     model.save_pretrained(config.output_dir)
     tokenizer.save_pretrained(config.output_dir)
+
+    # Log artifact to W&B after saving (must happen after save_pretrained)
+    if config.log_wandb_artifacts and config.report_to == "wandb":
+        log_wandb_artifact(
+            output_dir=config.output_dir,
+            artifact_name=config.wandb_artifact_name or f"llm-stage{config.stage}",
+            stage=config.stage,
+            config=config,
+            train_examples=len(train_dataset),
+            val_examples=len(val_dataset) if val_dataset else 0,
+        )
 
     return model, tokenizer
 
@@ -553,43 +555,12 @@ class LLMTrainConfig:
 
     def to_finetune_config(self) -> FinetuneConfig:
         """Convert to FinetuneConfig for the finetune_model function."""
-        return FinetuneConfig(
-            base_model=self.base_model,
-            stage1_checkpoint=self.stage1_checkpoint,
-            max_length=self.max_length,
-            load_in_4bit=self.load_in_4bit,
-            num_quantizers=0,  # Will be set from RQ-VAE config
-            codebook_size=0,  # Will be set from RQ-VAE config
-            lora_r=self.lora_r,
-            lora_alpha=self.lora_alpha,
-            lora_dropout=self.lora_dropout,
-            learning_rate=self.learning_rate,
-            batch_size=self.batch_size,
-            gradient_accumulation_steps=self.gradient_accumulation_steps,
-            num_train_epochs=self.num_train_epochs,
-            max_steps=self.max_steps,
-            warmup_ratio=self.warmup_ratio,
-            warmup_steps=self.warmup_steps,
-            weight_decay=self.weight_decay,
-            optim=self.optim,
-            lr_scheduler_type=self.lr_scheduler_type,
-            gradient_checkpointing=self.gradient_checkpointing,
-            output_dir=self.output_dir,
-            logging_steps=self.logging_steps,
-            save_strategy=self.save_strategy,
-            save_steps=self.save_steps,
-            save_total_limit=self.save_total_limit,
-            eval_steps=self.eval_steps,
-            stage=self.stage,
-            seed=self.seed,
-            num_proc=self.num_proc,
-            dataloader_num_workers=self.dataloader_num_workers,
-            report_to=self.report_to,
-            system_prompt=self.system_prompt,
-            log_wandb_artifacts=self.log_wandb_artifacts,
-            wandb_artifact_name=self.wandb_artifact_name,
-            recommendation_test_queries=self.recommendation_test_queries,
-        )
+        finetune_fields = {f.name for f in fields(FinetuneConfig)}
+        kwargs = {k: v for k, v in asdict(self).items() if k in finetune_fields}
+        # These will be set from RQ-VAE config
+        kwargs["num_quantizers"] = 0
+        kwargs["codebook_size"] = 0
+        return FinetuneConfig(**kwargs)
 
 
 @dataclass
@@ -773,24 +744,6 @@ def create_semantic_id_mapping(
     return mapping
 
 
-def _get_default_query_templates() -> dict[str, list[str]]:
-    """Get default query templates for training data generation."""
-    return {
-        "predict_semantic_id": [
-            "{title}",
-            "Find: {title}",
-            "Search for {title}",
-            "Recommend: {title}",
-            "Show me {title}",
-        ],
-        "predict_attribute": [
-            "What is the {field_name} for {semantic_id}?",
-            "Get {field_name} for {semantic_id}",
-            "{semantic_id} - what is the {field_name}?",
-        ],
-    }
-
-
 def train(config: LLMTrainConfig) -> LLMTrainResult:
     """
     End-to-end LLM training function.
@@ -896,13 +849,10 @@ def train(config: LLMTrainConfig) -> LLMTrainResult:
         )
         print(f"Loaded {len(items_dataset)} items with semantic IDs")
 
-        # Use provided templates or defaults
-        query_templates = config.query_templates or _get_default_query_templates()
-
         # Generate training examples
         examples = generate_training_examples(
             items_dataset,
-            query_templates=query_templates,
+            query_templates=config.query_templates,
             field_mapping=config.field_mapping,
             num_examples_per_item=config.num_examples_per_item,
             id_field=config.catalogue_id_field,

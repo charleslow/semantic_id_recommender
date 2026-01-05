@@ -1,8 +1,8 @@
 """
-HuggingFace Hub utilities for uploading and downloading RQ-VAE models.
+Utilities for loading/saving RQ-VAE models from various sources.
 
 This module provides functions to save/load RQ-VAE models and semantic ID mappings
-to/from the HuggingFace Hub for easy sharing and deployment.
+to/from HuggingFace Hub, W&B artifacts, and local paths.
 """
 
 import json
@@ -13,6 +13,70 @@ import torch
 from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 
 from .model import SemanticRQVAE, SemanticRQVAEConfig
+
+
+def load_from_path(model_path: str | Path) -> tuple[SemanticRQVAE, dict]:
+    """
+    Load RQ-VAE model from a local path.
+
+    Args:
+        model_path: Path to the model checkpoint file
+
+    Returns:
+        Tuple of (model, config_dict)
+    """
+    checkpoint = torch.load(model_path, map_location="cpu")
+    config_dict = checkpoint["config"]
+
+    config = SemanticRQVAEConfig(**config_dict)
+    model = SemanticRQVAE(config)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    print(f"Loaded RQ-VAE from: {model_path}")
+    print(f"  Config: {config_dict}")
+
+    return model, config_dict
+
+
+def load_from_wandb(
+    artifact_name: str,
+    project: str | None = None,
+    entity: str | None = None,
+) -> tuple[SemanticRQVAE, dict]:
+    """
+    Load RQ-VAE model from a wandb artifact.
+
+    Args:
+        artifact_name: Artifact name with version (e.g., "rqvae-model:v3" or "rqvae-model:latest")
+        project: W&B project name (optional, uses current run's project if None)
+        entity: W&B entity/username (optional)
+
+    Returns:
+        Tuple of (model, config_dict)
+    """
+    import wandb
+
+    # Build artifact path
+    if project:
+        if entity:
+            artifact_path = f"{entity}/{project}/{artifact_name}"
+        else:
+            artifact_path = f"{project}/{artifact_name}"
+    else:
+        artifact_path = artifact_name
+
+    # Download artifact
+    if wandb.run is not None:
+        artifact = wandb.run.use_artifact(artifact_path, type="model")
+    else:
+        api = wandb.Api()
+        artifact = api.artifact(artifact_path, type="model")
+
+    artifact_dir = artifact.download()
+    model_path = Path(artifact_dir) / "rqvae_model.pt"
+
+    return load_from_path(model_path)
 
 
 def save_model_for_hub(

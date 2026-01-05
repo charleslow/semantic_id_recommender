@@ -5,6 +5,8 @@ from .hub import (
     save_model_for_hub,
     upload_to_hub,
     load_from_hub,
+    load_from_path,
+    load_from_wandb,
     download_model_files,
 )
 
@@ -20,5 +22,7 @@ __all__ = [
     "save_model_for_hub",
     "upload_to_hub",
     "load_from_hub",
+    "load_from_path",
+    "load_from_wandb",
     "download_model_files",
 ]

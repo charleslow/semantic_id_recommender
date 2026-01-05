@@ -412,114 +412,82 @@ class RecommendationTestCallback(TrainerCallback):
             random.setstate(random_state)
 
 
-class WandbArtifactCallback(TrainerCallback):
+def log_wandb_artifact(
+    output_dir: str,
+    artifact_name: str,
+    stage: int,
+    config: "FinetuneConfig" = None,  # noqa: F821
+    train_examples: int = 0,
+    val_examples: int = 0,
+) -> bool:
     """
-    Trainer callback to log the trained model as a W&B artifact.
+    Log the trained model as a W&B artifact.
 
-    This callback logs the artifact at the end of training, ensuring
-    the W&B run is still active when the artifact is uploaded.
+    This function should be called AFTER the model has been saved to output_dir
+    using model.save_pretrained() and tokenizer.save_pretrained().
+
+    Args:
+        output_dir: Directory containing the saved model files
+        artifact_name: Name for the W&B artifact (e.g., "llm-stage1")
+        stage: Training stage (1 or 2)
+        config: Optional FinetuneConfig for metadata
+        train_examples: Number of training examples (for metadata)
+        val_examples: Number of validation examples (for metadata)
+
+    Returns:
+        True if artifact was logged successfully, False otherwise
     """
+    if wandb.run is None:
+        print("Warning: wandb.run is None, skipping artifact logging")
+        return False
 
-    def __init__(
-        self,
-        config: "FinetuneConfig",  # noqa: F821
-        train_examples: int = 0,
-        val_examples: int = 0,
-    ):
-        self.config = config
-        self.artifact_name = config.wandb_artifact_name or f"llm-stage{config.stage}"
-        self.train_examples = train_examples
-        self.val_examples = val_examples
-        self._logged = False
+    output_path = Path(output_dir)
+    print(f"\n=== Logging model artifact: {artifact_name} ===")
+    print(f"  Run ID: {wandb.run.id}")
+    print(f"  Output dir: {output_path}")
 
-    def _find_best_checkpoint(self, output_dir: Path) -> Path | None:
-        """
-        Find the best checkpoint based on trainer_state.json.
+    # Build metadata
+    metadata = {}
+    if config is not None:
+        metadata = asdict(config)
+    metadata["train_examples"] = train_examples
+    metadata["val_examples"] = val_examples
 
-        Returns the path to the best checkpoint directory, or None if not found.
-        """
-        import json
+    # Create artifact
+    artifact = wandb.Artifact(
+        name=artifact_name,
+        type="model",
+        description=f"LLM Stage {stage}: "
+        + ("Embedding training" if stage == 1 else "LoRA fine-tuning"),
+        metadata=metadata,
+    )
 
-        # Look for trainer_state.json in checkpoints to find best model
-        checkpoints = sorted(output_dir.glob("checkpoint-*"))
-        if not checkpoints:
-            return None
+    # Add all files from the output directory (not subdirectories)
+    # These are the final model files saved by save_pretrained()
+    files_added = 0
+    for file_path in output_path.iterdir():
+        if file_path.is_file():
+            artifact.add_file(str(file_path))
+            files_added += 1
+            print(f"    Added: {file_path.name}")
 
-        # Check the latest checkpoint's trainer_state.json for best_model_checkpoint
-        for checkpoint in reversed(checkpoints):
-            trainer_state_path = checkpoint / "trainer_state.json"
-            if trainer_state_path.exists():
-                with open(trainer_state_path) as f:
-                    trainer_state = json.load(f)
-                best_checkpoint_path = trainer_state.get("best_model_checkpoint")
-                if best_checkpoint_path:
-                    best_path = Path(best_checkpoint_path)
-                    if best_path.exists():
-                        return best_path
-                break
+    if files_added == 0:
+        print("  ERROR: No files found in output directory!")
+        print("  Make sure model.save_pretrained() was called before this function.")
+        return False
 
-        # Fallback to latest checkpoint
-        return checkpoints[-1]
+    print(f"  Total files added: {files_added}")
 
-    def on_train_end(self, args, state, control, **kwargs):
-        """Log the model artifact at the end of training."""
-        if self._logged:
-            return
+    # Log with aliases
+    aliases = ["latest"]
+    if stage == 2:
+        aliases.append("best")
 
-        if wandb.run is None:
-            print("Warning: wandb.run is None, skipping artifact logging")
-            return
-
-        try:
-            config = self.config
-            output_dir = Path(config.output_dir)
-            print(f"\n=== Logging model artifact: {self.artifact_name} ===")
-            print(f"  Run ID: {wandb.run.id}")
-            print(f"  Output dir: {output_dir}")
-
-            metadata = asdict(config)
-            metadata["train_examples"] = self.train_examples
-            metadata["val_examples"] = self.val_examples
-
-            artifact = wandb.Artifact(
-                name=self.artifact_name,
-                type="model",
-                description=f"LLM Stage {config.stage}: "
-                + ("Embedding training" if config.stage == 1 else "LoRA fine-tuning"),
-                metadata=metadata,
-            )
-
-            # Only add the final model files, not checkpoint subdirectories
-            # This ensures the artifact has config.json at the root level
-            # which is required by Unsloth/transformers to load the model
-            files_added = 0
-            for file_path in output_dir.iterdir():
-                if file_path.is_file():
-                    artifact.add_file(str(file_path))
-                    files_added += 1
-
-            if files_added == 0:
-                # Fallback: if no files at root, find the best checkpoint
-                # based on eval_loss from trainer_state.json
-                best_checkpoint = self._find_best_checkpoint(output_dir)
-                if best_checkpoint:
-                    print(f"  No files at root, using best checkpoint: {best_checkpoint}")
-                    for file_path in best_checkpoint.iterdir():
-                        if file_path.is_file():
-                            artifact.add_file(str(file_path), name=file_path.name)
-                            files_added += 1
-
-            print(f"  Added {files_added} files to artifact")
-
-            aliases = ["latest"]
-            if config.stage == 2:
-                aliases.append("best")
-
-            logged_artifact = wandb.run.log_artifact(artifact, aliases=aliases)
-            logged_artifact.wait()
-            self._logged = True
-            print(
-                f"Artifact {self.artifact_name} logged successfully with aliases: {aliases}"
-            )
-        except Exception as e:
-            print(f"Error logging artifact: {e}")
+    try:
+        logged_artifact = wandb.run.log_artifact(artifact, aliases=aliases)
+        logged_artifact.wait()
+        print(f"  Artifact {artifact_name} logged successfully with aliases: {aliases}")
+        return True
+    except Exception as e:
+        print(f"  Error logging artifact: {e}")
+        return False
