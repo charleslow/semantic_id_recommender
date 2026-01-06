@@ -114,34 +114,6 @@ Host runpod
     PubkeyAuthentication yes
 ```
 
-**Option 2: Copy SSH key into devcontainer**
-
-```bash
-# Inside your devcontainer, create .ssh directory
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-
-# Copy your key from Windows mount (adjust path as needed)
-cp /mnt/c/Users/<username>/.ssh/id_ed25519 ~/.ssh/
-cp /mnt/c/Users/<username>/.ssh/id_ed25519.pub ~/.ssh/
-chmod 600 ~/.ssh/id_ed25519
-
-# Create SSH config inside devcontainer
-cat >> ~/.ssh/config << 'EOF'
-Host runpod
-    HostName <POD_IP>
-    User root
-    Port <POD_PORT>
-    IdentityFile ~/.ssh/id_ed25519
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-    PubkeyAuthentication yes
-    IdentitiesOnly yes
-EOF
-chmod 600 ~/.ssh/config
-```
-
-Then connect from the devcontainer terminal: `ssh runpod`
 
 **Option 3: Configure VS Code to use WSL SSH**
 
@@ -158,13 +130,6 @@ This tells VS Code to use the Linux SSH binary instead of Windows.
 3. Select `runpod` from the list
 4. VS Code will open a new window connected to your pod
 5. Open the folder `/workspace/semantic_id_recommender`
-
-#### Tips for Remote Development
-
-- **Install extensions on remote**: Some extensions need to be installed on the remote machine. VS Code will prompt you to install them.
-- **Terminal access**: Use VS Code's integrated terminal (Ctrl+`) to run commands directly on the pod
-- **Port forwarding**: VS Code automatically forwards ports. If you run a Jupyter notebook or web server, it will be accessible locally.
-- **Reconnecting**: If the connection drops, VS Code will attempt to reconnect automatically. You can also manually reconnect via the Command Palette.
 
 ### 2.5 Setup the Environment
 
@@ -210,26 +175,6 @@ ssh root@${POD_IP} -p ${POD_PORT} -i ~/.ssh/id_ed25519 \
 
 > **Note**: Use the **SSH over exposed TCP** connection (direct IP and port) from Step 2.3.
 
-### 2.7 Run Training with tmux
-
-> **Important**: Always use `tmux` for long-running training jobs. This ensures training continues even if your SSH connection drops.
-
-Install tmux if not available.
-
-```bash
-apt-get update && apt-get install -y tmux
-```
-
-Now we start a new tmux session or attach to an existing one:
-
-```bash
-# Start a new session
-tmux new -s training
-source .venv/bin/activate
-
-# Attach to an existing session
-tmux attach -t training 
-```
 
 #### Train RQ-VAE
 
@@ -273,86 +218,6 @@ python -m scripts.train_llm --config configs/stage2_config.yaml --stage 2
 python -m scripts.train_llm --config configs/stage1_config.yaml --stage 1,2 --stage2-config configs/stage2_config.yaml
 ```
 
-#### tmux Commands Reference
-
-| Action                                      | Command / Shortcut           |
-|---------------------------------------------|------------------------------|
-| Detach from tmux (training continues)       | `Ctrl+B`, then `D`           |
-| Reattach to running session                 | `tmux attach -t training`    |
-| List all sessions                           | `tmux ls`                    |
-| Kill a session when done                    | `tmux kill-session -t training` |
-| Create a new window in the same session     | `Ctrl+B`, then `C`           |
-| Switch between windows                      | `Ctrl+B`, then window number (0, 1, 2...) |
-
-### 2.8 Save Models to HuggingFace Hub
-
-After training completes, push your models to HuggingFace Hub (required for deployment).
-
-> **Note**: Your `HF_TOKEN` environment variable from Step 2.2 will be used automatically.
-
-#### Create Private HuggingFace Repositories First
-
-1. Go to https://huggingface.co/new
-2. Repository name: `semantic-rqvae` (or your preferred name)
-3. Type: **Model**
-4. Visibility: **Private**
-5. Click "Create repository"
-6. Note your repo ID: `your-username/semantic-rqvae`
-
-#### Upload Your Models
-
-```bash
-# For RQ-VAE model - use Python script or notebook
-python -c "
-from src.rqvae.hub import upload_to_hub
-import os
-upload_to_hub(
-    local_dir='models/rqvae_hub',
-    repo_id='your-username/semantic-rqvae',
-    token=os.getenv('HF_TOKEN')
-)
-"
-```
-
----
-
-## 3. Using a Pre-built Docker Image (Recommended)
-
-To avoid running `uv sync` every time you start a pod, build and push a Docker image with dependencies pre-installed.
-
-### 3.1 Create a Docker Hub Account
-
-1. Sign up at https://hub.docker.com/signup (free tier is fine)
-2. Note your username (e.g., `yourusername`)
-
-### 3.2 Build and Push the Image
-
-From your local machine (or any machine with Docker):
-
-```bash
-# Clone the repo if you haven't
-git clone https://github.com/charleslow/semantic_id_recommender
-cd semantic_id_recommender
-
-# Login to Docker Hub
-docker login
-
-# Build the image (replace 'yourusername' with your Docker Hub username)
-docker build -t yourusername/semantic-id-recommender:latest .
-
-# Push to Docker Hub
-docker push yourusername/semantic-id-recommender:latest
-```
-
-### 3.3 Launch RunPod with Your Image
-
-1. Go to **Pods** → **Deploy**
-2. Under **Container Image**, enter: `yourusername/semantic-id-recommender:latest`
-   - Or `ghcr.io/yourusername/semantic-id-recommender:latest` if using GitHub
-3. Set disk space (at least 50GB) and select GPU
-4. Add environment variables (`HF_TOKEN`, `WANDB_API_KEY`) as described in Step 2.2
-5. Click **Deploy**
-
 ---
 
 ## 4. Deploying to Modal
@@ -368,54 +233,46 @@ Modal provides serverless GPU deployment for the fine-tuned recommender model.
    modal setup  # Opens browser for authentication
    ```
 
-### 4.2 Download Model from Weights & Biases
+### 4.2 Download Artifacts from Weights & Biases
 
-Download your fine-tuned model from W&B:
+Download all necessary artifacts (model + data) using the download script:
 
 ```bash
-# Install wandb if needed
-pip install wandb
-
-# Login to W&B
+# Login to W&B (if not already logged in)
 wandb login
 
-# Download the stage 2 model artifact
-wandb artifact get <your-username>/<project-name>/llm-stage2:latest --root ./checkpoints/llm
+# Download all artifacts to outputs/
+python -m scripts.download_artifacts --project <your-username>/semantic-id-recommender
 ```
 
-Or use Python:
+This downloads to the `outputs/` directory:
+- `outputs/llm/` - fine-tuned LLM model (stage 2)
+- `outputs/data/semantic_ids.jsonl` - mappings between item IDs and semantic IDs
+- `outputs/data/catalogue.jsonl` - catalogue items with their semantic IDs
 
-```python
-import wandb
-
-run = wandb.init()
-artifact = run.use_artifact('<your-username>/<project-name>/llm-stage2:latest')
-artifact.download(root='./checkpoints/llm')
-```
-
-### 4.3 Download Catalogue and Semantic IDs from W&B
-
-The RQ-VAE training saves the catalogue and semantic ID mappings as a W&B artifact:
+You can also specify custom artifact versions:
 
 ```bash
-# Download the data artifact
-wandb artifact get <your-username>/<project-name>/rqvae-model-data:latest --root ./data/
+python -m scripts.download_artifacts \
+    --project <your-username>/semantic-id-recommender \
+    --model-artifact llm-stage2:v3 \
+    --data-artifact rqvae-model-data:v2 \
+    --output-dir outputs
 ```
 
-This downloads:
-- `semantic_ids.jsonl` - mappings between item IDs and semantic IDs
-- `catalogue.jsonl` - catalogue items with their semantic IDs
-
-### 4.4 Upload Model to Modal Volume
+### 4.3 Upload Artifacts to Modal Volume
 
 After downloading, upload your fine-tuned model and data files to a Modal volume:
 
 ```bash
-# Upload model and mapping files
-python -m scripts.deploy \
-    --upload checkpoints/llm \
-    --catalogue data/catalogue.jsonl \
-    --semantic-ids data/semantic_ids.jsonl
+# Upload model and mapping files (uses default paths from outputs/)
+python -m scripts.upload_artifacts
+
+# Or specify custom paths
+python -m scripts.upload_artifacts \
+    --model outputs/llm \
+    --catalogue outputs/data/catalogue.jsonl \
+    --semantic-ids outputs/data/semantic_ids.jsonl
 ```
 
 This uploads:
@@ -428,7 +285,7 @@ This uploads:
 Deploy the serverless endpoint:
 
 ```bash
-python -m scripts.deploy --deploy
+python -m scripts.deploy
 ```
 
 This deploys the `semantic-id-recommender` app to Modal with:
@@ -448,15 +305,17 @@ python -m scripts.deploy --test "wireless mouse"
 python -m scripts.deploy --test "wireless mouse" --api-url "https://your-app-url.modal.run"
 ```
 
-### 4.7 Full Deployment Command
+### 4.6 Full Deployment Workflow
 
-You can combine all steps:
+Complete deployment workflow:
 
 ```bash
-python -m scripts.deploy \
-    --upload checkpoints/llm \
-    --catalogue data/catalogue.jsonl \
-    --semantic-ids data/semantic_ids.jsonl \
-    --deploy \
-    --test "wireless mouse"
+# 1. Download artifacts from W&B
+python -m scripts.download_artifacts --project <your-username>/semantic-id-recommender
+
+# 2. Upload to Modal volume
+python -m scripts.upload_artifacts
+
+# 3. Deploy and test
+python -m scripts.deploy --test "wireless mouse"
 ```

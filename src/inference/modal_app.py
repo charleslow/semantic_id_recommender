@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import modal
+import yaml
 
 from src.inference.constants import (
     MODAL_CATALOGUE_PATH,
@@ -17,6 +18,11 @@ from src.inference.constants import (
     MODAL_VOLUME_NAME,
 )
 from src.llm.data import REC_TOKEN
+
+# Load inference config
+_config_path = Path(__file__).parent / "config.yaml"
+with open(_config_path) as f:
+    INFERENCE_CONFIG = yaml.safe_load(f)
 
 # Modal app configuration
 app = modal.App("semantic-id-recommender")
@@ -53,20 +59,26 @@ class Recommender:
     @modal.enter()
     def load_model(self):
         """Load model and mappings on container start."""
+        from transformers import AutoTokenizer
         from vllm import LLM, SamplingParams
 
+        # Load tokenizer for chat template
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+
         # Load model with vLLM
+        model_config = INFERENCE_CONFIG["model"]
         self.llm = LLM(
             model=self.model_path,
-            max_model_len=512,
-            dtype="half",
-            trust_remote_code=True,
+            max_model_len=model_config["max_model_len"],
+            dtype=model_config["dtype"],
+            trust_remote_code=model_config["trust_remote_code"],
         )
 
         # Default sampling params
+        sampling_config = INFERENCE_CONFIG["sampling"]
         self.sampling_params = SamplingParams(
-            max_tokens=32,
-            temperature=0.1,
+            max_tokens=sampling_config["max_tokens"],
+            temperature=sampling_config["temperature"],
         )
 
         # Load semantic ID mapping from JSONL
@@ -91,7 +103,7 @@ class Recommender:
                     self.catalogue[item_id] = item
 
     def _format_prompt(self, query: str) -> str:
-        """Format query into model prompt.
+        """Format query into model prompt using tokenizer's chat template.
 
         Appends [REC] token to user query to trigger semantic ID generation.
         """
@@ -100,8 +112,13 @@ class Recommender:
             "output the semantic ID of the most relevant item. "
             "Respond only with the semantic ID tokens."
         )
-        # Append [REC] token to user query to trigger semantic ID generation
-        return f"<|system|>\n{system_prompt}\n<|user|>\n{query}{REC_TOKEN}\n<|assistant|>\n"
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"{query}{REC_TOKEN}"},
+        ]
+        return self.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
 
     def _parse_semantic_id(self, output: str) -> str | None:
         """Extract semantic ID from model output.
@@ -120,19 +137,12 @@ class Recommender:
         return None
 
     @modal.method()
-    def recommend(
-        self,
-        query: str,
-        num_recommendations: int = 5,
-        return_scores: bool = False,
-    ) -> list[dict]:
+    def recommend(self, query: str) -> list[dict]:
         """
         Get recommendations for a query.
 
         Args:
             query: User query text
-            num_recommendations: Number of items to return
-            return_scores: Whether to include confidence scores
 
         Returns:
             List of recommended items with metadata
@@ -165,23 +175,15 @@ class Recommender:
             **item,
         }
 
-        if return_scores:
-            result["score"] = 1.0  # Top recommendation
-
         return [result]
 
     @modal.method()
-    def batch_recommend(
-        self,
-        queries: list[str],
-        num_recommendations: int = 5,
-    ) -> list[list[dict]]:
+    def batch_recommend(self, queries: list[str]) -> list[list[dict]]:
         """
         Get recommendations for multiple queries.
 
         Args:
             queries: List of user query texts
-            num_recommendations: Number of items per query
 
         Returns:
             List of recommendation lists
@@ -232,15 +234,15 @@ class Recommender:
 
 @app.function(image=image)
 @modal.web_endpoint(method="POST")
-def recommend_api(query: str, num_recommendations: int = 5) -> dict:
+def recommend_api(query: str) -> dict:
     """
     REST API endpoint for recommendations.
 
     POST /recommend_api
-    Body: {"query": "...", "num_recommendations": 5}
+    Body: {"query": "..."}
     """
     recommender = Recommender()
-    results = recommender.recommend.remote(query, num_recommendations)
+    results = recommender.recommend.remote(query)
     return {"recommendations": results}
 
 
