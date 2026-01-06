@@ -42,7 +42,6 @@ def load_from_path(model_path: str | Path) -> tuple[SemanticRQVAE, dict]:
 def load_from_wandb(
     artifact_name: str,
     project: str | None = None,
-    entity: str | None = None,
 ) -> tuple[SemanticRQVAE, dict]:
     """
     Load RQ-VAE model from a wandb artifact.
@@ -50,7 +49,6 @@ def load_from_wandb(
     Args:
         artifact_name: Artifact name with version (e.g., "rqvae-model:v3" or "rqvae-model:latest")
         project: W&B project name (optional, uses current run's project if None)
-        entity: W&B entity/username (optional)
 
     Returns:
         Tuple of (model, config_dict)
@@ -59,10 +57,7 @@ def load_from_wandb(
 
     # Build artifact path
     if project:
-        if entity:
-            artifact_path = f"{entity}/{project}/{artifact_name}"
-        else:
-            artifact_path = f"{project}/{artifact_name}"
+        artifact_path = f"{project}/{artifact_name}"
     else:
         artifact_path = artifact_name
 

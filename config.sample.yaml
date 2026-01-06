@@ -91,7 +91,6 @@ data:
 # Logging
 logging:
   wandb_project: "semantic-id-recommender"
-  wandb_entity: null  # Set to your wandb username/team
   log_every_n_steps: 10
 
 # Output paths

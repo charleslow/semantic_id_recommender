@@ -241,6 +241,25 @@ python -m scripts.train_rqvae --config configs/rqvae_config.yaml
 python -m scripts.train_rqvae --config configs/rqvae_config.yaml --create-dummy --dummy-size 1000
 ```
 
+#### Generate Semantic IDs from Existing RQ-VAE Model
+
+If you've already trained an RQ-VAE model and want to generate semantic IDs for a new catalogue (or re-generate for the same catalogue), use eval mode:
+
+```bash
+# Load model from W&B artifact and generate semantic IDs
+python -m scripts.train_rqvae \
+    --config configs/rqvae_config.yaml \
+    --eval \
+    --wandb-artifact <your-username>/semantic-id-recommender/rqvae-model:latest
+```
+
+This will:
+1. Download the RQ-VAE model from your W&B artifact
+2. Load the catalogue specified in your config
+3. Generate embeddings and semantic IDs for all items
+4. Save `semantic_ids.jsonl` and `catalogue.jsonl` to the output directory
+5. Log the data artifact back to W&B (if `log_wandb_artifacts: true` in config)
+
 #### Fine-tune LLM
 
 ```bash
@@ -333,3 +352,111 @@ docker push yourusername/semantic-id-recommender:latest
 3. Set disk space (at least 50GB) and select GPU
 4. Add environment variables (`HF_TOKEN`, `WANDB_API_KEY`) as described in Step 2.2
 5. Click **Deploy**
+
+---
+
+## 4. Deploying to Modal
+
+Modal provides serverless GPU deployment for the fine-tuned recommender model.
+
+### 4.1 Prerequisites
+
+1. **Modal Account** - Sign up at https://modal.com/signup ($30 free credits)
+2. **Modal CLI** - Install and authenticate:
+   ```bash
+   pip install modal
+   modal setup  # Opens browser for authentication
+   ```
+
+### 4.2 Download Model from Weights & Biases
+
+Download your fine-tuned model from W&B:
+
+```bash
+# Install wandb if needed
+pip install wandb
+
+# Login to W&B
+wandb login
+
+# Download the stage 2 model artifact
+wandb artifact get <your-username>/<project-name>/llm-stage2:latest --root ./checkpoints/llm
+```
+
+Or use Python:
+
+```python
+import wandb
+
+run = wandb.init()
+artifact = run.use_artifact('<your-username>/<project-name>/llm-stage2:latest')
+artifact.download(root='./checkpoints/llm')
+```
+
+### 4.3 Download Catalogue and Semantic IDs from W&B
+
+The RQ-VAE training saves the catalogue and semantic ID mappings as a W&B artifact:
+
+```bash
+# Download the data artifact
+wandb artifact get <your-username>/<project-name>/rqvae-model-data:latest --root ./data/
+```
+
+This downloads:
+- `semantic_ids.jsonl` - mappings between item IDs and semantic IDs
+- `catalogue.jsonl` - catalogue items with their semantic IDs
+
+### 4.4 Upload Model to Modal Volume
+
+After downloading, upload your fine-tuned model and data files to a Modal volume:
+
+```bash
+# Upload model and mapping files
+python -m scripts.deploy \
+    --upload checkpoints/llm \
+    --catalogue data/catalogue.jsonl \
+    --semantic-ids data/semantic_ids.jsonl
+```
+
+This uploads:
+- Your fine-tuned LLM model to `/model/semantic-recommender/`
+- The catalogue JSONL to `/model/catalogue.jsonl`
+- The semantic ID mappings to `/model/semantic_ids.jsonl`
+
+### 4.5 Deploy the App
+
+Deploy the serverless endpoint:
+
+```bash
+python -m scripts.deploy --deploy
+```
+
+This deploys the `semantic-id-recommender` app to Modal with:
+- A10G GPU
+- 5-minute idle timeout (scales to zero when not in use)
+- Support for 10 concurrent requests
+
+### 4.6 Test the Deployment
+
+Test your deployed recommender:
+
+```bash
+# Test with a query
+python -m scripts.deploy --test "wireless mouse"
+
+# Or test against a specific API URL
+python -m scripts.deploy --test "wireless mouse" --api-url "https://your-app-url.modal.run"
+```
+
+### 4.7 Full Deployment Command
+
+You can combine all steps:
+
+```bash
+python -m scripts.deploy \
+    --upload checkpoints/llm \
+    --catalogue data/catalogue.jsonl \
+    --semantic-ids data/semantic_ids.jsonl \
+    --deploy \
+    --test "wireless mouse"
+```

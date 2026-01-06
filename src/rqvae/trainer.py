@@ -244,6 +244,229 @@ class TrainResult:
     semantic_ids: dict[str, str] | None = None
 
 
+@dataclass
+class EvalResult:
+    """Result of evaluation containing metrics and semantic ID mappings."""
+
+    metrics: dict
+    semantic_ids_map: dict[str, str]  # item_id -> semantic_id
+    semantic_to_item: dict[str, str]  # semantic_id -> item_id
+    semantic_ids_path: Path
+    catalogue_path: Path
+
+
+def eval_and_save(
+    config: RqvaeTrainConfig,
+    model: SemanticRQVAE | None = None,
+    dataset: "ItemEmbeddingDataset | None" = None,  # noqa: F821
+    catalogue_items: list[dict] | None = None,
+    log_to_wandb: bool = False,
+    wandb_model_artifact: str | None = None,
+) -> EvalResult:
+    """
+    Evaluate RQ-VAE model and save semantic ID mappings.
+
+    Can be called:
+    1. After training with model/dataset already loaded
+    2. Standalone to load model from W&B artifact and re-evaluate
+    3. Standalone to load model from local path and re-evaluate
+
+    Args:
+        config: Training/eval configuration
+        model: Pre-loaded model (if None, loads from wandb_model_artifact or config.model_save_path)
+        dataset: Pre-loaded dataset with embeddings (if None, loads from config)
+        catalogue_items: Pre-loaded catalogue items (if None, loads from config)
+        log_to_wandb: Whether to log metrics and artifacts to W&B
+        wandb_model_artifact: W&B artifact path to load model from
+            (e.g., "project/rqvae-model:latest")
+
+    Returns:
+        EvalResult with metrics and paths to saved files
+
+    Raises:
+        FileNotFoundError: If model file doesn't exist when loading from local path
+        ValueError: If wandb_model_artifact is invalid
+    """
+    import json
+
+    from .dataset import ItemEmbeddingDataset
+    from .hub import load_from_wandb
+
+    model_save_path = Path(config.model_save_path)
+    output_dir = model_save_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Load model if not provided ---
+    if model is None:
+        if wandb_model_artifact:
+            # Load from W&B artifact
+            print(f"Loading model from W&B artifact: {wandb_model_artifact}...")
+            model, _ = load_from_wandb(wandb_model_artifact)
+            print("Model loaded from W&B successfully")
+        elif model_save_path.exists():
+            # Load from local path
+            print(f"Loading model from {model_save_path}...")
+            checkpoint = torch.load(model_save_path, weights_only=False)
+            model_config = SemanticRQVAEConfig(**checkpoint["config"])
+            model = SemanticRQVAE(model_config)
+            model.load_state_dict(checkpoint["model_state_dict"])
+            print("Model loaded successfully")
+        else:
+            raise FileNotFoundError(
+                f"Model not found. Provide wandb_model_artifact or ensure model exists at {model_save_path}."
+            )
+
+    # --- Load dataset if not provided ---
+    if dataset is None:
+        if config.catalogue_path is None:
+            raise ValueError("catalogue_path must be set in config")
+        catalogue_path = Path(config.catalogue_path)
+        print(f"Loading catalogue from {catalogue_path}...")
+        dataset = ItemEmbeddingDataset.from_catalogue(
+            catalogue_path=catalogue_path,
+            embedding_model=config.embedding_model,
+            fields=config.catalogue_fields,
+            id_field=config.catalogue_id_field,
+            cache_path=config.embeddings_cache_path,
+            batch_size=config.embedding_batch_size,
+        )
+
+    # --- Load catalogue items if not provided ---
+    if catalogue_items is None:
+        if config.catalogue_path is None:
+            raise ValueError("catalogue_path must be set in config")
+        catalogue_path = Path(config.catalogue_path)
+        if catalogue_path.suffix == ".jsonl":
+            catalogue_items = []
+            with open(catalogue_path) as f:
+                for line in f:
+                    catalogue_items.append(json.loads(line))
+        else:
+            with open(catalogue_path) as f:
+                data = json.load(f)
+                catalogue_items = (
+                    data if isinstance(data, list) else data.get("items", [])
+                )
+
+    embeddings = dataset.embeddings
+
+    # --- Evaluate on full dataset ---
+    print("\n=== Evaluating model ===")
+    model.eval()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+
+    with torch.no_grad():
+        all_indices = model.get_semantic_ids(embeddings.to(device))
+        stats = model.compute_codebook_stats(all_indices)
+
+    # Compute collision rate
+    semantic_id_strings = model.semantic_id_to_string(all_indices)
+    unique_ids = len(set(semantic_id_strings))
+    collision_rate = 1 - unique_ids / len(embeddings)
+
+    # Build semantic ID mapping
+    semantic_ids_map = {
+        str(item_id): sem_id
+        for item_id, sem_id in zip(dataset.item_ids, semantic_id_strings)
+    }
+
+    # Build reverse mapping (semantic_id -> item_id)
+    semantic_to_item = {
+        sem_id: str(item_id)
+        for item_id, sem_id in zip(dataset.item_ids, semantic_id_strings)
+    }
+
+    # Build metrics dict
+    metrics = {
+        "avg_perplexity": stats["avg_perplexity"].item(),
+        "avg_usage": stats["avg_usage"].item(),
+        "total_items": len(embeddings),
+        "unique_semantic_ids": unique_ids,
+        "collision_rate": collision_rate,
+    }
+
+    # Add per-level metrics
+    num_quantizers = all_indices.shape[1]
+    for q in range(num_quantizers):
+        metrics[f"level_{q}_perplexity"] = stats["perplexity_per_level"][q].item()
+        metrics[f"level_{q}_usage"] = stats["usage_per_level"][q].item()
+
+    print(f"Avg perplexity: {metrics['avg_perplexity']:.2f}")
+    print(f"Avg usage: {metrics['avg_usage'] * 100:.1f}%")
+    print(f"Unique IDs: {unique_ids} / {len(embeddings)}")
+    print(f"Collision rate: {collision_rate * 100:.2f}%")
+
+    # --- Save semantic ID mappings ---
+    semantic_ids_path = output_dir / "semantic_ids.jsonl"
+    with open(semantic_ids_path, "w") as f:
+        for item_id, sem_id in semantic_ids_map.items():
+            f.write(json.dumps({"item_id": item_id, "semantic_id": sem_id}) + "\n")
+    print(f"Semantic IDs saved to {semantic_ids_path}")
+
+    # --- Save catalogue with semantic IDs ---
+    catalogue_path_out = output_dir / "catalogue.jsonl"
+    with open(catalogue_path_out, "w") as f:
+        for item in catalogue_items:
+            item_id = str(item.get(config.catalogue_id_field, len(catalogue_items)))
+            item_with_id = item.copy()
+            item_with_id["semantic_id"] = semantic_ids_map.get(item_id)
+            f.write(json.dumps(item_with_id) + "\n")
+    print(f"Catalogue with semantic IDs saved to {catalogue_path_out}")
+
+    # --- Log to W&B if requested ---
+    if log_to_wandb and config.log_wandb_artifacts:
+        try:
+            import wandb
+
+            if wandb.run is None:
+                print("Warning: wandb.run is None, skipping W&B logging")
+            else:
+                # Log metrics
+                wandb.log({f"eval/{k}": v for k, v in metrics.items()})
+
+                # Set summary metrics
+                wandb.summary["final_avg_perplexity"] = metrics["avg_perplexity"]
+                wandb.summary["final_avg_usage"] = metrics["avg_usage"]
+                wandb.summary["final_collision_rate"] = metrics["collision_rate"]
+                wandb.summary["final_unique_ids"] = metrics["unique_semantic_ids"]
+                wandb.summary["total_items"] = metrics["total_items"]
+
+                for q in range(num_quantizers):
+                    wandb.summary[f"final_level_{q}_perplexity"] = metrics[
+                        f"level_{q}_perplexity"
+                    ]
+                    wandb.summary[f"final_level_{q}_usage"] = metrics[
+                        f"level_{q}_usage"
+                    ]
+
+                # Log data artifact
+                data_artifact = wandb.Artifact(
+                    name=f"{config.artifact_name}-data",
+                    type="dataset",
+                    description="Semantic ID mappings and catalogue",
+                    metadata={
+                        "total_items": len(catalogue_items),
+                        "unique_semantic_ids": unique_ids,
+                        "collision_rate": collision_rate,
+                    },
+                )
+                data_artifact.add_file(str(semantic_ids_path))
+                data_artifact.add_file(str(catalogue_path_out))
+                wandb.log_artifact(data_artifact, aliases=["latest"])
+                print("Metrics and data artifact logged to W&B")
+        except ImportError:
+            print("wandb not installed, skipping W&B logging")
+
+    return EvalResult(
+        metrics=metrics,
+        semantic_ids_map=semantic_ids_map,
+        semantic_to_item=semantic_to_item,
+        semantic_ids_path=semantic_ids_path,
+        catalogue_path=catalogue_path_out,
+    )
+
+
 def train(config: RqvaeTrainConfig) -> TrainResult:
     """
     End-to-end training function for RQ-VAE.
@@ -253,8 +476,8 @@ def train(config: RqvaeTrainConfig) -> TrainResult:
     2. Load catalogue and generate/cache embeddings
     3. Split dataset into train/val
     4. Train the model with Lightning
-    5. Evaluate and compute final metrics
-    6. Log summary metrics to W&B
+    5. Save model checkpoint
+    6. Evaluate and save semantic ID mappings (via eval_and_save)
     7. Clean up W&B run
 
     Args:
@@ -280,6 +503,8 @@ def train(config: RqvaeTrainConfig) -> TrainResult:
         >>> result = train(config)
         >>> print(f"Collision rate: {result.metrics['collision_rate']:.2%}")
     """
+    import json
+
     import lightning as L
     from lightning.pytorch.loggers import WandbLogger
     from torch.utils.data import DataLoader, random_split
@@ -336,6 +561,20 @@ def train(config: RqvaeTrainConfig) -> TrainResult:
     try:
         # --- 2. Load catalogue and generate embeddings ---
         print(f"Loading catalogue from {catalogue_path}...")
+
+        # Load raw catalogue items for later saving
+        if catalogue_path.suffix == ".jsonl":
+            catalogue_items = []
+            with open(catalogue_path) as f:
+                for line in f:
+                    catalogue_items.append(json.loads(line))
+        else:
+            with open(catalogue_path) as f:
+                data = json.load(f)
+                catalogue_items = (
+                    data if isinstance(data, list) else data.get("items", [])
+                )
+
         dataset = ItemEmbeddingDataset.from_catalogue(
             catalogue_path=catalogue_path,
             embedding_model=config.embedding_model,
@@ -415,71 +654,8 @@ def train(config: RqvaeTrainConfig) -> TrainResult:
         trainer.fit(trainer_module, train_loader, val_loader)
         print("Training complete!")
 
-        # --- 5. Evaluate on full dataset ---
+        # --- 5. Save model checkpoint ---
         model = trainer_module.model
-        model.eval()
-        device = next(model.parameters()).device
-
-        with torch.no_grad():
-            all_indices = model.get_semantic_ids(embeddings.to(device))
-            stats = model.compute_codebook_stats(all_indices)
-
-        # Compute collision rate
-        semantic_id_strings = model.semantic_id_to_string(all_indices)
-        unique_ids = len(set(semantic_id_strings))
-        collision_rate = 1 - unique_ids / len(embeddings)
-
-        # Build semantic ID mapping
-        semantic_ids_map = {
-            str(item_id): sem_id
-            for item_id, sem_id in zip(dataset.item_ids, semantic_id_strings)
-        }
-
-        # Build metrics dict
-        metrics = {
-            "avg_perplexity": stats["avg_perplexity"].item(),
-            "avg_usage": stats["avg_usage"].item(),
-            "total_items": len(embeddings),
-            "unique_semantic_ids": unique_ids,
-            "collision_rate": collision_rate,
-        }
-
-        # Add per-level metrics
-        for q in range(config.num_quantizers):
-            metrics[f"level_{q}_perplexity"] = stats["perplexity_per_level"][q].item()
-            metrics[f"level_{q}_usage"] = stats["usage_per_level"][q].item()
-
-        print("\n=== Evaluation Results ===")
-        print(
-            f"Avg perplexity: {metrics['avg_perplexity']:.2f} / {config.codebook_size}"
-        )
-        print(f"Avg usage: {metrics['avg_usage'] * 100:.1f}%")
-        print(f"Unique IDs: {unique_ids} / {len(embeddings)}")
-        print(f"Collision rate: {collision_rate * 100:.2f}%")
-
-        # --- 6. Log summary metrics to W&B ---
-        if wandb_run:
-            import wandb
-
-            # Log final evaluation metrics
-            wandb.log({f"eval/{k}": v for k, v in metrics.items()})
-
-            # Set summary metrics (shown in W&B run overview)
-            wandb.summary["final_avg_perplexity"] = metrics["avg_perplexity"]
-            wandb.summary["final_avg_usage"] = metrics["avg_usage"]
-            wandb.summary["final_collision_rate"] = metrics["collision_rate"]
-            wandb.summary["final_unique_ids"] = metrics["unique_semantic_ids"]
-            wandb.summary["total_items"] = metrics["total_items"]
-
-            for q in range(config.num_quantizers):
-                wandb.summary[f"final_level_{q}_perplexity"] = metrics[
-                    f"level_{q}_perplexity"
-                ]
-                wandb.summary[f"final_level_{q}_usage"] = metrics[f"level_{q}_usage"]
-
-            print("Summary metrics logged to W&B")
-
-        # Save model locally
         model_save_path = Path(config.model_save_path)
         model_save_path.parent.mkdir(parents=True, exist_ok=True)
         checkpoint = {
@@ -489,11 +665,20 @@ def train(config: RqvaeTrainConfig) -> TrainResult:
         torch.save(checkpoint, model_save_path)
         print(f"Model saved to {model_save_path}")
 
+        # --- 6. Evaluate and save semantic IDs ---
+        eval_result = eval_and_save(
+            config=config,
+            model=model,
+            dataset=dataset,
+            catalogue_items=catalogue_items,
+            log_to_wandb=wandb_run is not None,
+        )
+
         return TrainResult(
             model=model,
             config=model_config,
-            metrics=metrics,
-            semantic_ids=semantic_ids_map,
+            metrics=eval_result.metrics,
+            semantic_ids=eval_result.semantic_ids_map,
         )
 
     finally:

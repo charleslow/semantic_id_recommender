@@ -9,26 +9,28 @@ from pathlib import Path
 
 import modal
 
+from src.inference.constants import (
+    MODAL_CATALOGUE_PATH,
+    MODAL_MODEL_PATH,
+    MODAL_MOUNT_PATH,
+    MODAL_SEMANTIC_IDS_PATH,
+    MODAL_VOLUME_NAME,
+)
 from src.llm.data import REC_TOKEN
 
 # Modal app configuration
 app = modal.App("semantic-id-recommender")
 
-# Volumes for caching models
-hf_cache_volume = modal.Volume.from_name("hf-cache", create_if_missing=True)
-model_volume = modal.Volume.from_name("semantic-recommender-model", create_if_missing=True)
+# Volume for model storage (uploaded via scripts.deploy)
+model_volume = modal.Volume.from_name(MODAL_VOLUME_NAME, create_if_missing=True)
 
 # Container image
-image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .pip_install(
-        "torch>=2.1.0",
-        "transformers>=4.36.0",
-        "accelerate>=0.25.0",
-        "vllm>=0.6.0",
-        "outlines>=0.1.0",
-        "huggingface_hub>=0.20.0",
-    )
+image = modal.Image.debian_slim(python_version="3.12").pip_install(
+    "torch>=2.1.0",
+    "transformers>=4.36.0",
+    "accelerate>=0.25.0",
+    "vllm>=0.6.0",
+    "outlines>=0.1.0",
 )
 
 
@@ -36,8 +38,7 @@ image = (
     image=image,
     gpu="A10G",
     volumes={
-        "/root/.cache/huggingface": hf_cache_volume,
-        "/model": model_volume,
+        MODAL_MOUNT_PATH: model_volume,
     },
     container_idle_timeout=300,  # 5 minutes
     allow_concurrent_inputs=10,
@@ -45,24 +46,9 @@ image = (
 class Recommender:
     """Serverless recommender using vLLM."""
 
-    model_path: str = "/model/semantic-recommender"
-    semantic_ids_path: str = "/model/semantic_ids.json"
-    catalogue_path: str = "/model/catalogue.json"
-
-    @modal.build()
-    def download_model(self):
-        """Pre-download model during container build."""
-        from huggingface_hub import snapshot_download
-        import os
-
-        # Download model if HF_REPO is set
-        hf_repo = os.environ.get("HF_MODEL_REPO")
-        if hf_repo:
-            snapshot_download(
-                repo_id=hf_repo,
-                local_dir=self.model_path,
-                local_dir_use_symlinks=False,
-            )
+    model_path: str = MODAL_MODEL_PATH
+    semantic_ids_path: str = MODAL_SEMANTIC_IDS_PATH
+    catalogue_path: str = MODAL_CATALOGUE_PATH
 
     @modal.enter()
     def load_model(self):
@@ -83,24 +69,26 @@ class Recommender:
             temperature=0.1,
         )
 
-        # Load semantic ID mapping
+        # Load semantic ID mapping from JSONL
+        self.semantic_to_item = {}
+        self.item_to_semantic = {}
         if Path(self.semantic_ids_path).exists():
             with open(self.semantic_ids_path) as f:
-                mapping = json.load(f)
-                self.semantic_to_item = mapping.get("semantic_to_item", {})
-                self.item_to_semantic = mapping.get("item_to_semantic", {})
-        else:
-            self.semantic_to_item = {}
-            self.item_to_semantic = {}
+                for line in f:
+                    entry = json.loads(line)
+                    item_id = entry["item_id"]
+                    sem_id = entry["semantic_id"]
+                    self.item_to_semantic[item_id] = sem_id
+                    self.semantic_to_item[sem_id] = item_id
 
-        # Load catalogue
+        # Load catalogue from JSONL
+        self.catalogue = {}
         if Path(self.catalogue_path).exists():
             with open(self.catalogue_path) as f:
-                data = json.load(f)
-                items = data if isinstance(data, list) else data.get("items", [])
-                self.catalogue = {str(item.get("id", i)): item for i, item in enumerate(items)}
-        else:
-            self.catalogue = {}
+                for i, line in enumerate(f):
+                    item = json.loads(line)
+                    item_id = str(item.get("id", i))
+                    self.catalogue[item_id] = item
 
     def _format_prompt(self, query: str) -> str:
         """Format query into model prompt.
@@ -219,11 +207,15 @@ class Recommender:
                 continue
 
             item = self.catalogue.get(item_id, {})
-            results.append([{
-                "item_id": item_id,
-                "semantic_id": semantic_id,
-                **item,
-            }])
+            results.append(
+                [
+                    {
+                        "item_id": item_id,
+                        "semantic_id": semantic_id,
+                        **item,
+                    }
+                ]
+            )
 
         return results
 

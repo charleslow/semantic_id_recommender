@@ -2,17 +2,23 @@
 Deployment script for Modal.
 
 Usage:
-    python -m scripts.deploy --upload-model checkpoints/llm
+    python -m scripts.deploy --upload checkpoints/llm
     python -m scripts.deploy --deploy
     python -m scripts.deploy --test "wireless mouse"
 """
 
 import argparse
 import json
-import shutil
 from pathlib import Path
 
 import modal
+
+from src.inference.constants import (
+    CATALOGUE_FILE,
+    MODAL_VOLUME_NAME,
+    MODEL_DIR,
+    SEMANTIC_IDS_FILE,
+)
 
 
 def upload_model_to_volume(
@@ -28,7 +34,7 @@ def upload_model_to_volume(
         catalogue_path: Path to catalogue JSON
         semantic_ids_path: Path to semantic IDs JSON
     """
-    volume = modal.Volume.from_name("semantic-recommender-model", create_if_missing=True)
+    volume = modal.Volume.from_name(MODAL_VOLUME_NAME, create_if_missing=True)
 
     print("Uploading model to Modal volume...")
 
@@ -38,19 +44,19 @@ def upload_model_to_volume(
         for file in model_dir.rglob("*"):
             if file.is_file():
                 rel_path = file.relative_to(model_dir)
-                remote_path = f"/semantic-recommender/{rel_path}"
+                remote_path = f"/{MODEL_DIR}/{rel_path}"
                 batch.put_file(str(file), remote_path)
                 print(f"  Uploaded: {rel_path}")
 
         # Upload catalogue
         if Path(catalogue_path).exists():
-            batch.put_file(catalogue_path, "/catalogue.json")
-            print(f"  Uploaded: catalogue.json")
+            batch.put_file(catalogue_path, f"/{CATALOGUE_FILE}")
+            print(f"  Uploaded: {CATALOGUE_FILE}")
 
         # Upload semantic IDs
         if Path(semantic_ids_path).exists():
-            batch.put_file(semantic_ids_path, "/semantic_ids.json")
-            print(f"  Uploaded: semantic_ids.json")
+            batch.put_file(semantic_ids_path, f"/{SEMANTIC_IDS_FILE}")
+            print(f"  Uploaded: {SEMANTIC_IDS_FILE}")
 
     print("Upload complete!")
 
@@ -82,7 +88,7 @@ def test_deployment(query: str, api_url: str | None = None):
         )
         results = response.json()
     else:
-        from src.inference.modal_app import app, Recommender
+        from src.inference.modal_app import Recommender, app
 
         with app.run():
             recommender = Recommender()
@@ -95,21 +101,21 @@ def test_deployment(query: str, api_url: str | None = None):
 def main():
     parser = argparse.ArgumentParser(description="Deploy semantic ID recommender")
     parser.add_argument(
-        "--upload-model",
+        "--upload",
         type=str,
         help="Upload model from this path to Modal volume",
     )
     parser.add_argument(
         "--catalogue",
         type=str,
-        default="data/catalogue.json",
-        help="Path to catalogue JSON",
+        default="data/catalogue.jsonl",
+        help="Path to catalogue JSONL",
     )
     parser.add_argument(
         "--semantic-ids",
         type=str,
-        default="data/semantic_ids.json",
-        help="Path to semantic IDs JSON",
+        default="data/semantic_ids.jsonl",
+        help="Path to semantic IDs JSONL",
     )
     parser.add_argument(
         "--deploy",
@@ -128,9 +134,9 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.upload_model:
+    if args.upload:
         upload_model_to_volume(
-            args.upload_model,
+            args.upload,
             args.catalogue,
             args.semantic_ids,
         )
