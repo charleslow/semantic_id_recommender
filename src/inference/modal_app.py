@@ -17,7 +17,9 @@ from src.inference.constants import (
     MODAL_SEMANTIC_IDS_PATH,
     MODAL_VOLUME_NAME,
 )
-from src.llm.data import REC_TOKEN
+
+# Define locally to avoid importing src.llm.data which has heavy dependencies (datasets)
+REC_TOKEN = "[REC]"
 
 # Load inference config
 _config_path = Path(__file__).parent / "config.yaml"
@@ -32,11 +34,11 @@ model_volume = modal.Volume.from_name(MODAL_VOLUME_NAME, create_if_missing=True)
 
 # Container image
 image = modal.Image.debian_slim(python_version="3.12").pip_install(
-    "torch>=2.1.0",
-    "transformers>=4.36.0",
+    "torch>=2.7.1",
+    "transformers>=4.57.3",
     "accelerate>=0.25.0",
     "vllm>=0.6.0",
-    "outlines>=0.1.0",
+    "pyyaml>=6.0",
 )
 
 
@@ -46,9 +48,9 @@ image = modal.Image.debian_slim(python_version="3.12").pip_install(
     volumes={
         MODAL_MOUNT_PATH: model_volume,
     },
-    container_idle_timeout=300,  # 5 minutes
-    allow_concurrent_inputs=10,
+    scaledown_window=300,  # 5 minutes
 )
+@modal.concurrent(max_inputs=10)
 class Recommender:
     """Serverless recommender using vLLM."""
 
@@ -233,7 +235,7 @@ class Recommender:
 
 
 @app.function(image=image)
-@modal.web_endpoint(method="POST")
+@modal.fastapi_endpoint(method="POST")
 def recommend_api(query: str) -> dict:
     """
     REST API endpoint for recommendations.
@@ -247,7 +249,7 @@ def recommend_api(query: str) -> dict:
 
 
 @app.function(image=image)
-@modal.web_endpoint(method="GET")
+@modal.fastapi_endpoint(method="GET")
 def health() -> dict:
     """Health check endpoint."""
     recommender = Recommender()
@@ -264,7 +266,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.deploy:
-        modal.runner.deploy_app(app)
+        app.deploy()
     elif args.query:
         with app.run():
             recommender = Recommender()

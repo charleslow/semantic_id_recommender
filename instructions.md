@@ -254,9 +254,9 @@ You can also specify custom artifact versions:
 
 ```bash
 python -m scripts.download_artifacts \
-    --project <your-username>/semantic-id-recommender \
-    --model-artifact llm-stage2:v3 \
-    --data-artifact rqvae-model-data:v2 \
+    --project semantic-id-recommender \
+    --model-artifact llm-stage2:latest \
+    --data-artifact rqvae-model-data:latest \
     --output-dir outputs
 ```
 
@@ -299,7 +299,7 @@ Test your deployed recommender:
 
 ```bash
 # Test with a query
-python -m scripts.deploy --test "wireless mouse"
+python -m scripts.deploy --no-deploy --test "interview tips"
 
 # Or test against a specific API URL
 python -m scripts.deploy --test "wireless mouse" --api-url "https://your-app-url.modal.run"

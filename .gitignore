@@ -232,3 +232,4 @@ unsloth_compiled_cache/*
 lightning_logs/*
 models/*
 artifacts/*
+outputs/*

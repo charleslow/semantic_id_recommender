@@ -527,12 +527,16 @@ def finetune_model(
     # Train
     trainer.train()
 
-    # Save model and tokenizer
-    model.save_pretrained(config.output_dir)
-    tokenizer.save_pretrained(config.output_dir)
+    # Save merged model and tokenizer (required for vLLM inference)
+    # save_pretrained_merged creates a full model that vLLM can load
+    model.save_pretrained_merged(
+        config.output_dir,
+        tokenizer,
+        save_method="merged_16bit",  # Full precision merged model
+    )
 
     # Debug: Print contents of output directory
-    print(f"\n=== Contents of {config.output_dir} after save_pretrained ===")
+    print(f"\n=== Contents of {config.output_dir} after save_pretrained_merged ===")
     output_path = Path(config.output_dir)
     if output_path.exists():
         for item in sorted(output_path.iterdir()):

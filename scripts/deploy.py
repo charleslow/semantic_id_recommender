@@ -9,15 +9,13 @@ Usage:
 import argparse
 import json
 
-import modal
-
 
 def deploy_app():
     """Deploy the Modal app."""
     from src.inference.modal_app import app
 
     print("🚀 Deploying to Modal...")
-    modal.runner.deploy_app(app)
+    app.deploy()
     print("✅ Deployment complete!")
 
 
