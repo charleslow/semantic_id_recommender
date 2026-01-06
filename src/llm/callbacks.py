@@ -94,20 +94,18 @@ def _compute_prefix_accuracy_any(
     for pred in predictions:
         pred_tokens = _parse_semantic_id_tokens(pred)
 
-        for k in range(1, num_quantizers + 1):
-            # Check if we have at least k tokens and all k tokens are valid
-            if len(pred_tokens) >= k:
-                # Check each token has the correct quantizer level
-                all_valid = True
-                for i in range(k):
-                    token = pred_tokens[i]
-                    # Extract quantizer level from token like [SEM_0_5]
-                    match = re.match(r"\[SEM_(\d+)_\d+\]", token)
-                    if not match or int(match.group(1)) != i:
-                        all_valid = False
-                        break
-                if all_valid:
-                    prefix_valid[k] += 1
+        # Find the longest valid prefix with one pass
+        valid_prefix_length = 0
+        for i, token in enumerate(pred_tokens):
+            match = re.match(r"\[SEM_(\d+)_\d+\]", token)
+            if match and int(match.group(1)) == i:
+                valid_prefix_length = i + 1
+            else:
+                break
+
+        # All prefixes up to valid_prefix_length are valid
+        for k in range(1, min(valid_prefix_length, num_quantizers) + 1):
+            prefix_valid[k] += 1
 
     return {
         f"prefix_{k}_accuracy": prefix_valid[k] / total
