@@ -419,9 +419,30 @@ def eval_and_save(
         try:
             import wandb
 
-            if wandb.run is None:
-                print("Warning: wandb.run is None, skipping W&B logging")
-            else:
+            # Resume the original W&B run if none exists and we have a model artifact
+            wandb_run_started = False
+            if wandb.run is None and wandb_model_artifact:
+                # Get run info from the model artifact
+                api = wandb.Api()
+                artifact = api.artifact(wandb_model_artifact)
+                source_run = artifact.logged_by()
+                if source_run:
+                    wandb.init(
+                        project=source_run.project,
+                        entity=source_run.entity,
+                        id=source_run.id,
+                        resume="must",
+                    )
+                    wandb_run_started = True
+                    print(f"Resumed original W&B run: {wandb.run.url}")
+                else:
+                    print(
+                        "Warning: Could not find source run for artifact, skipping W&B logging"
+                    )
+            elif wandb.run is None:
+                print("Warning: No active W&B run and no model artifact to resume from")
+
+            if wandb.run is not None:
                 # Log metrics
                 wandb.log({f"eval/{k}": v for k, v in metrics.items()})
 
@@ -455,6 +476,11 @@ def eval_and_save(
                 data_artifact.add_file(str(catalogue_path_out))
                 wandb.log_artifact(data_artifact, aliases=["latest"])
                 print("Metrics and data artifact logged to W&B")
+
+                # Finish the resumed run
+                if wandb_run_started:
+                    wandb.finish()
+                    print("W&B run finished")
         except ImportError:
             print("wandb not installed, skipping W&B logging")
 
