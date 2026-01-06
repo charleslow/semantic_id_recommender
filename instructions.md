@@ -195,7 +195,7 @@ If you've already trained an RQ-VAE model and want to generate semantic IDs for 
 python -m scripts.train_rqvae \
     --config configs/rqvae_config.yaml \
     --eval \
-    --wandb-artifact <your-username>/semantic-id-recommender/rqvae-model:latest
+    --wandb-artifact semantic-id-recommender/rqvae-model:latest
 ```
 
 This will:
