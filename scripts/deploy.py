@@ -37,11 +37,12 @@ def test_deployment(query: str, api_url: str | None = None):
         )
         results = response.json()
     else:
-        from src.inference.modal_app import Recommender, app
+        import modal
 
-        with app.run():
-            recommender = Recommender()
-            results = recommender.recommend.remote(query)
+        # Call the already-deployed app (no ephemeral instance)
+        Recommender = modal.Cls.from_name("semantic-id-recommender", "Recommender")
+        recommender = Recommender()
+        results = recommender.recommend.remote(query)
 
     print(f"Query: {query}")
     print(f"Results: {json.dumps(results, indent=2)}")

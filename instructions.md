@@ -300,9 +300,6 @@ Test your deployed recommender:
 ```bash
 # Test with a query
 python -m scripts.deploy --no-deploy --test "interview tips"
-
-# Or test against a specific API URL
-python -m scripts.deploy --test "wireless mouse" --api-url "https://your-app-url.modal.run"
 ```
 
 ### 4.6 Full Deployment Workflow
